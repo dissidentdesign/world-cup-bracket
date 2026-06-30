@@ -36,12 +36,37 @@ const teams = [
 const geometry = {
   size: 1000,
   center: 500,
-  startAngle: 6,
+  // -5.625° puts the first pair symmetrically straddling the 12 o'clock
+  // axis so France | Sweden sit equidistant left/right of the top.
+  startAngle: -5.625,
   teamRadius: 452,
   leafStemRadius: 410,
   railRadii: [365, 286, 218, 154],
   roundRadii: [330, 250, 178, 118],
 };
+
+// Official WC2026 R32 bracket positions, clockwise from the top.
+// Each entry is the matchup at that slot; the first team sits at the lower
+// slot index (earlier clockwise position). Matched to API team names so the
+// lookup against snapshot.bracket works without aliasing.
+const BRACKET_POSITION = [
+  ["France", "Sweden"],
+  ["Germany", "Paraguay"],
+  ["Brazil", "Japan"],
+  ["Ivory Coast", "Norway"],
+  ["Mexico", "Ecuador"],
+  ["England", "Congo DR"],
+  ["Argentina", "Cape Verde Islands"],
+  ["Australia", "Egypt"],
+  ["Switzerland", "Algeria"],
+  ["Colombia", "Ghana"],
+  ["Belgium", "Senegal"],
+  ["USA", "Bosnia & Herzegovina"],
+  ["Austria", "Spain"],
+  ["Croatia", "Portugal"],
+  ["Morocco", "Netherlands"],
+  ["South Africa", "Canada"],
+];
 
 const seededByCode = new Map(teams.map((item) => [item.code, item]));
 
@@ -476,14 +501,31 @@ function applyBracketLayout(bracket) {
   if (!r32 || r32.matches.length !== 16) return;
 
   const newLayout = [];
-  r32.matches.forEach((match, matchIndex) => {
-    newLayout.push(buildLeaf(match, "home", matchIndex * 2, r32.matches.length * 2));
-    newLayout.push(buildLeaf(match, "away", matchIndex * 2 + 1, r32.matches.length * 2));
+  const totalSlots = BRACKET_POSITION.length * 2;
+  const missing = [];
+
+  BRACKET_POSITION.forEach(([leftName, rightName], position) => {
+    const match = r32.matches.find((m) => {
+      const a = m.home?.name, b = m.away?.name;
+      return (a === leftName && b === rightName) || (a === rightName && b === leftName);
+    });
+    if (!match) {
+      missing.push(`${leftName} vs ${rightName}`);
+      return;
+    }
+    const leftSide = match.home?.name === leftName ? "home" : "away";
+    const rightSide = leftSide === "home" ? "away" : "home";
+    newLayout.push(buildLeaf(match, leftSide, position * 2, totalSlots));
+    newLayout.push(buildLeaf(match, rightSide, position * 2 + 1, totalSlots));
   });
+
+  if (newLayout.length !== totalSlots) {
+    console.warn("Bracket positions missing from API:", missing);
+    return;
+  }
 
   layoutTeams = newLayout;
   teamById = new Map(layoutTeams.map((item) => [item.id, item]));
-
   if (!teamById.has(selectedId)) {
     selectedId = layoutTeams[0].id;
   }
