@@ -429,6 +429,87 @@ h1 {
   color: var(--green);
 }
 
+.status-badge.is-active {
+  background: rgba(227, 177, 81, 0.18);
+  color: var(--gold);
+}
+
+.path-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path-row {
+  display: grid;
+  grid-template-columns: 36px 42px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(247, 241, 223, 0.1);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.path-chip {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.path-chip.is-win {
+  background: rgba(88, 184, 131, 0.22);
+  color: var(--green);
+}
+
+.path-chip.is-loss {
+  background: rgba(215, 75, 75, 0.22);
+  color: #f0a4a4;
+}
+
+.path-chip.is-draw {
+  background: rgba(227, 177, 81, 0.22);
+  color: var(--gold);
+}
+
+.path-chip.is-upcoming {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.path-round {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.path-score {
+  grid-column: 3;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.path-score strong {
+  margin-right: 8px;
+  font-weight: 800;
+}
+
+.path-meta {
+  grid-column: 2 / 4;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

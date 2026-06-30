@@ -346,14 +346,14 @@ function selectTeam(id) {
 
 function renderTeamPanel(item) {
   const live = item.live;
-  const stats = live?.stats;
-  const statGrid = stats
+  const agg = live?.aggregateStats;
+  const statGrid = agg && agg.played > 0
     ? `
       <div class="stat-grid">
-        <div class="stat"><strong>${stats.goalsFor}</strong><span>Goals for</span></div>
-        <div class="stat"><strong>${stats.goalsAgainst}</strong><span>Goals against</span></div>
-        <div class="stat"><strong>${stats.wins}-${stats.draws}-${stats.losses}</strong><span>W-D-L</span></div>
-        <div class="stat"><strong>${stats.points}</strong><span>Points</span></div>
+        <div class="stat"><strong>${agg.played}</strong><span>Matches played</span></div>
+        <div class="stat"><strong>${agg.wins}-${agg.draws}-${agg.losses}</strong><span>W-D-L</span></div>
+        <div class="stat"><strong>${agg.gf}</strong><span>Goals for</span></div>
+        <div class="stat"><strong>${agg.ga} (${agg.gd >= 0 ? "+" : ""}${agg.gd})</strong><span>Goals against (GD)</span></div>
       </div>
     `
     : `
@@ -365,47 +365,21 @@ function renderTeamPanel(item) {
       </div>
     `;
 
-  const next = live?.nextFixture;
-  const last = live?.lastMatch;
-  const bracket = item.bracketMatch;
-  // Prefer the team's R32 bracketMatch if we have it (covers placeholder teams
-  // that have no per-team live data). Fall back to the per-team next/last.
-  const showBracket = bracket && (!next || bracket.isCompleted);
-  const matchMode = showBracket
-    ? bracket.isCompleted ? "last" : "next"
-    : next ? "next" : last ? "last" : "next";
-  const matchTitle = matchMode === "last" ? "Last Result" : "Next Game";
-
-  const matchOpponent = showBracket
-    ? bracket.opponent
-    : next?.opponent ?? last?.opponent ?? item.opponent;
-
-  const matchDate = showBracket && bracket.date
-    ? formatFixtureDate(bracket.date)
-    : next?.date
-      ? formatFixtureDate(next.date)
-      : last?.dateTs
-        ? formatFixtureDate(new Date(last.dateTs).toISOString())
-        : item.date;
-
-  const matchVenue = showBracket
-    ? bracket.venue ?? item.venue
-    : next?.venue ?? last?.venue ?? item.venue;
-
-  const matchTag = showBracket
-    ? bracket.isCompleted
-      ? `<span class="round-tag">${bracket.status} ${bracket.myScore}-${bracket.oppScore}${bracket.isWinner ? " · WIN" : " · OUT"}</span>`
-      : `<span class="round-tag">Round of 32</span>`
-    : next?.round
-      ? `<span class="round-tag">${next.round}</span>`
-      : last?.score
-        ? `<span class="round-tag">${last.status === "FT" ? "FT" : last.status} ${last.score}</span>`
-        : "";
-
-  const formString = live?.form ? insertDashes(live.form) : item.form;
-  const player = live?.topScorer?.name
-    ? `${live.topScorer.name} (${live.topScorer.goals} goals)`
-    : item.player;
+  const chips = [];
+  if (live?.topScorer?.name) {
+    chips.push(`<span class="chip">⚽ ${live.topScorer.name} · ${live.topScorer.goals}g</span>`);
+  } else if (item.player && item.player !== "—") {
+    chips.push(`<span class="chip">⚽ ${item.player}</span>`);
+  }
+  if (live?.topAssister?.name) {
+    chips.push(`<span class="chip">🅰️ ${live.topAssister.name} · ${live.topAssister.assists}a</span>`);
+  }
+  if (live?.form) {
+    chips.push(`<span class="chip">Form ${insertDashes(live.form)}</span>`);
+  }
+  const chipRow = chips.length
+    ? `<div class="chip-row" aria-label="Team highlights">${chips.join("")}</div>`
+    : "";
 
   const groupLabel = live?.group
     ? `Group ${live.group.replace(/^Group\s+/i, "")}`
@@ -414,11 +388,15 @@ function renderTeamPanel(item) {
   const statusBadge = item.eliminated
     ? `<span class="status-badge is-out">Eliminated${item.eliminatedAt ? ` · ${item.eliminatedAt}` : ""}</span>`
     : item.advanced
-      ? `<span class="status-badge is-in">Advanced</span>`
-      : "";
+      ? `<span class="status-badge is-in">Advanced · ${live?.stage ?? "next round"}</span>`
+      : live?.stage
+        ? `<span class="status-badge is-active">${live.stage}</span>`
+        : "";
+
+  const path = renderTournamentPath(live, item);
 
   const sourceNote = live
-    ? `Live stats and fixtures from API-Football · refreshed ${formatRelative(live.generatedAt)}.`
+    ? `Live data via API-Football · refreshed ${formatRelative(live.generatedAt)}.`
     : "Match data is seeded. Connect the worker (set data-api-base on &lt;body&gt;) to show live fixtures.";
 
   panel.innerHTML = `
@@ -434,26 +412,14 @@ function renderTeamPanel(item) {
         </div>
       </div>
 
-      <div class="chip-row" aria-label="Team form and key player">
-        <span class="chip">Form ${formString}</span>
-        <span class="chip">Key player ${player}</span>
-      </div>
+      ${chipRow}
 
       <section>
-        <h3 class="section-title">Current Stats</h3>
+        <h3 class="section-title">Tournament Stats</h3>
         ${statGrid}
       </section>
 
-      <section>
-        <h3 class="section-title">${matchTitle}</h3>
-        <div class="match-card">
-          <div class="match-row">
-            <span class="opponent">${matchMode === "last" ? "vs" : "vs"} ${matchOpponent}</span>
-            <span>${matchDate}</span>
-          </div>
-          <span>${matchVenue}${matchTag}</span>
-        </div>
-      </section>
+      ${path}
 
       <section>
         <h3 class="section-title">Where To Watch</h3>
@@ -465,6 +431,75 @@ function renderTeamPanel(item) {
       <p class="source-note">${sourceNote}</p>
     </article>
   `;
+}
+
+function renderTournamentPath(live, item) {
+  const fixtures = live?.fixtures || [];
+  if (fixtures.length === 0) {
+    // Fall back to the bracketMatch (covers placeholder teams that didn't
+    // resolve a code, so they're not in the global teams map).
+    const bm = item.bracketMatch;
+    if (!bm) return "";
+    return `
+      <section>
+        <h3 class="section-title">Round of 32</h3>
+        <ul class="path-list">
+          ${pathRow({
+            round: "Round of 32",
+            opponent: bm.opponent,
+            date: bm.date,
+            venue: bm.venue,
+            status: bm.status,
+            myScore: bm.myScore,
+            oppScore: bm.oppScore,
+            result: bm.isCompleted ? (bm.isWinner ? "W" : "L") : null,
+          })}
+        </ul>
+      </section>
+    `;
+  }
+  return `
+    <section>
+      <h3 class="section-title">Tournament Path</h3>
+      <ul class="path-list">
+        ${fixtures.map((f) => pathRow(f)).join("")}
+      </ul>
+    </section>
+  `;
+}
+
+function pathRow(f) {
+  const result = f.result;
+  const resultClass = result === "W" ? "is-win" : result === "L" ? "is-loss" : result === "D" ? "is-draw" : "is-upcoming";
+  const resultLabel = result ?? (f.status === "NS" ? "—" : f.status);
+  const scoreText = f.myScore != null && f.oppScore != null
+    ? `${f.myScore}–${f.oppScore}`
+    : "vs";
+  const roundShort = shortRound(f.round);
+  const dateText = f.date ? formatFixtureDate(f.date) : "";
+  const venueText = f.venue || "";
+  return `
+    <li class="path-row">
+      <span class="path-chip ${resultClass}" aria-label="Result ${resultLabel}">${resultLabel}</span>
+      <span class="path-round">${roundShort}</span>
+      <span class="path-score"><strong>${scoreText}</strong> ${f.opponent}</span>
+      <span class="path-meta">${[dateText, venueText].filter(Boolean).join(" · ")}</span>
+    </li>
+  `;
+}
+
+function shortRound(round) {
+  if (!round) return "";
+  if (/group stage - 1/i.test(round)) return "G1";
+  if (/group stage - 2/i.test(round)) return "G2";
+  if (/group stage - 3/i.test(round)) return "G3";
+  if (/round of 32/i.test(round)) return "R32";
+  if (/round of 16/i.test(round)) return "R16";
+  if (/quarter/i.test(round)) return "QF";
+  if (/semi/i.test(round)) return "SF";
+  if (/3rd|third/i.test(round)) return "3rd";
+  if (/^final/i.test(round)) return "F";
+  return round;
 }
 
 function insertDashes(form) {
@@ -524,11 +559,16 @@ function mergeSnapshot(snapshot) {
     item.live = {
       generatedAt: snapshot.generatedAt,
       stats: live.stats,
+      aggregateStats: live.aggregateStats,
+      fixtures: live.fixtures,
+      stage: live.stage,
+      stageKey: live.stageKey,
       form: live.form,
       group: live.group,
       nextFixture: live.nextFixture,
       lastMatch: live.lastMatch,
       topScorer: live.topScorer,
+      topAssister: live.topAssister,
     };
     if (live.eliminated) {
       item.eliminated = true;

@@ -10,7 +10,7 @@ const API_BASE = "https://v3.football.api-sports.io";
 const LEAGUE_ID = 1; // FIFA World Cup
 const DEFAULT_SEASON = 2026;
 const SNAPSHOT_CACHE_TTL_SECONDS = 300; // 5 minutes
-const CACHE_VERSION = "v3"; // Bump whenever the snapshot shape changes.
+const CACHE_VERSION = "v4"; // Bump whenever the snapshot shape changes.
 
 const KNOCKOUT_ROUNDS = [
   { key: "R32", patterns: [/round of 32/i] },
@@ -142,18 +142,23 @@ async function handleSnapshot(request, env, ctx, url) {
 }
 
 async function buildSnapshot(apiKey, season) {
-  const [standings, fixtures, scorers] = await Promise.all([
+  const [standings, fixtures, scorers, assisters] = await Promise.all([
     apiFootball(apiKey, "/standings", { league: LEAGUE_ID, season }),
     apiFootball(apiKey, "/fixtures", { league: LEAGUE_ID, season }),
     apiFootball(apiKey, "/players/topscorers", { league: LEAGUE_ID, season }),
+    apiFootball(apiKey, "/players/topassists", { league: LEAGUE_ID, season }),
   ]);
 
   const teams = collectTeams(standings, fixtures);
   attachStandings(teams, standings);
   attachNextFixtures(teams, fixtures);
   attachTopScorers(teams, scorers);
+  attachTopAssisters(teams, assisters);
+  attachTeamFixtures(teams, fixtures);
+  attachAggregateStats(teams);
   const bracket = buildBracket(fixtures);
   attachEliminationState(teams, bracket);
+  attachTeamStage(teams, bracket);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -370,10 +375,119 @@ function attachTopScorers(teams, scorers) {
     const goals = row.statistics?.[0]?.goals?.total ?? 0;
     const existing = teams[code].topScorer;
     if (existing && existing.goals >= goals) continue;
-    teams[code].topScorer = {
-      name: row.player?.name,
-      goals,
+    teams[code].topScorer = { name: row.player?.name, goals };
+  }
+}
+
+function attachTopAssisters(teams, assisters) {
+  for (const row of assisters?.response ?? []) {
+    const code = resolveCode(row.statistics?.[0]?.team);
+    if (!code || !teams[code]) continue;
+    const assists = row.statistics?.[0]?.goals?.assists ?? 0;
+    const existing = teams[code].topAssister;
+    if (existing && existing.assists >= assists) continue;
+    teams[code].topAssister = { name: row.player?.name, assists };
+  }
+}
+
+function attachTeamFixtures(teams, fixtures) {
+  for (const m of fixtures?.response ?? []) {
+    const homeCode = resolveCode(m.teams?.home);
+    const awayCode = resolveCode(m.teams?.away);
+    const round = m.league?.round || null;
+    const date = m.fixture?.date || null;
+    const status = m.fixture?.status?.short || "NS";
+    const venue = m.fixture?.venue?.name
+      ? `${m.fixture.venue.name}${m.fixture.venue.city ? `, ${m.fixture.venue.city}` : ""}`
+      : null;
+    const homeGoals = m.goals?.home;
+    const awayGoals = m.goals?.away;
+    const isCompleted = ["FT", "AET", "PEN"].includes(status);
+
+    const push = (code, isHome) => {
+      if (!code || !teams[code]) return;
+      if (!teams[code].fixtures) teams[code].fixtures = [];
+      const myScore = isHome ? homeGoals : awayGoals;
+      const oppScore = isHome ? awayGoals : homeGoals;
+      const oppName = isHome ? m.teams?.away?.name : m.teams?.home?.name;
+      let result = null;
+      if (isCompleted && myScore != null && oppScore != null) {
+        // PEN results need the explicit winner flag — scores can be level.
+        if (status === "PEN") {
+          const myWinner = isHome ? m.teams?.home?.winner : m.teams?.away?.winner;
+          result = myWinner ? "W" : "L";
+        } else if (myScore > oppScore) {
+          result = "W";
+        } else if (myScore < oppScore) {
+          result = "L";
+        } else {
+          result = "D";
+        }
+      }
+      teams[code].fixtures.push({
+        dateTs: date ? Date.parse(date) : 0,
+        date,
+        round,
+        opponent: oppName,
+        venue,
+        status,
+        myScore,
+        oppScore,
+        result,
+        home: isHome,
+      });
     };
+
+    push(homeCode, true);
+    push(awayCode, false);
+  }
+
+  for (const team of Object.values(teams)) {
+    if (!team.fixtures) continue;
+    team.fixtures.sort((a, b) => a.dateTs - b.dateTs);
+  }
+}
+
+function attachAggregateStats(teams) {
+  for (const team of Object.values(teams)) {
+    const fixtures = team.fixtures || [];
+    const agg = { played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0, gd: 0 };
+    for (const f of fixtures) {
+      if (!f.result) continue;
+      agg.played += 1;
+      if (f.result === "W") agg.wins += 1;
+      else if (f.result === "L") agg.losses += 1;
+      else if (f.result === "D") agg.draws += 1;
+      agg.gf += f.myScore ?? 0;
+      agg.ga += f.oppScore ?? 0;
+    }
+    agg.gd = agg.gf - agg.ga;
+    team.aggregateStats = agg;
+  }
+}
+
+function attachTeamStage(teams, bracket) {
+  // Mark each team's current stage so the panel can show "Round of 16" /
+  // "Eliminated · Round of 32" without recomputing from fixtures client-side.
+  const stageOrder = ["R32", "R16", "QF", "SF", "F"];
+  const stageLabel = { R32: "Round of 32", R16: "Round of 16", QF: "Quarter-final", SF: "Semi-final", F: "Final" };
+  for (const round of bracket.rounds) {
+    if (!stageOrder.includes(round.key)) continue;
+    for (const match of round.matches) {
+      for (const side of ["home", "away"]) {
+        const code = match[side].code;
+        if (!code || !teams[code]) continue;
+        const team = teams[code];
+        // Only overwrite with a later stage; never downgrade.
+        const currentRank = team.stageRank ?? -1;
+        const newRank = stageOrder.indexOf(round.key);
+        if (newRank > currentRank) {
+          team.stage = stageLabel[round.key];
+          team.stageKey = round.key;
+          team.stageRank = newRank;
+        }
+      }
+    }
   }
 }
 
