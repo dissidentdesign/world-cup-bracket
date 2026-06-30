@@ -6,7 +6,7 @@
     <title>World Cup Bracket</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body data-api-base="">
     <main class="app-shell">
       <section class="bracket-stage" aria-label="World Cup knockout bracket">
         <header class="top-bar">
@@ -17,6 +17,7 @@
           <div class="status-panel" aria-live="polite">
             <span class="status-dot"></span>
             <span id="tournament-status">Rounded knockout bracket</span>
+            <span id="live-status" class="live-status" data-state="offline">Seeded data</span>
           </div>
         </header>
 

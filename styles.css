@@ -104,6 +104,64 @@ h1 {
   box-shadow: 0 0 14px var(--green);
 }
 
+.live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.live-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.live-status[data-state="live"] {
+  color: var(--green);
+}
+
+.live-status[data-state="live"]::before {
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+  animation: live-pulse 2.4s ease-in-out infinite;
+}
+
+.live-status[data-state="connecting"] {
+  color: var(--gold);
+}
+
+.live-status[data-state="connecting"]::before {
+  background: var(--gold);
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.round-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(227, 177, 81, 0.16);
+  color: var(--gold);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .bracket-wrap {
   position: relative;
   width: min(88vh, 100%, 1040px);

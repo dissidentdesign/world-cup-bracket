@@ -81,6 +81,7 @@ function team(id, name, code, flag, color, seed, confederation, player, opponent
       ["Spanish", "Telemundo / Universo"],
       ["Streaming", "Fox Sports app, Peacock"],
     ],
+    live: null,
   };
 }
 
@@ -230,6 +231,45 @@ function selectTeam(id) {
 }
 
 function renderTeamPanel(item) {
+  const live = item.live;
+  const stats = live?.stats;
+  const statGrid = stats
+    ? `
+      <div class="stat-grid">
+        <div class="stat"><strong>${stats.goalsFor}</strong><span>Goals for</span></div>
+        <div class="stat"><strong>${stats.goalsAgainst}</strong><span>Goals against</span></div>
+        <div class="stat"><strong>${stats.wins}-${stats.draws}-${stats.losses}</strong><span>W-D-L</span></div>
+        <div class="stat"><strong>${stats.points}</strong><span>Points</span></div>
+      </div>
+    `
+    : `
+      <div class="stat-grid">
+        <div class="stat"><strong>${item.goalsFor}</strong><span>Goals for</span></div>
+        <div class="stat"><strong>${item.goalsAgainst}</strong><span>Goals against</span></div>
+        <div class="stat"><strong>${item.possession}</strong><span>Average possession</span></div>
+        <div class="stat"><strong>${item.xg}</strong><span>Expected goals</span></div>
+      </div>
+    `;
+
+  const next = live?.nextFixture;
+  const nextOpponent = next?.opponent ?? item.opponent;
+  const nextDate = next?.date ? formatFixtureDate(next.date) : item.date;
+  const nextVenue = next?.venue ?? item.venue;
+  const nextRound = next?.round ? `<span class="round-tag">${next.round}</span>` : "";
+
+  const formString = live?.form ? insertDashes(live.form) : item.form;
+  const player = live?.topScorer?.name
+    ? `${live.topScorer.name} (${live.topScorer.goals} goals)`
+    : item.player;
+
+  const groupLabel = live?.group
+    ? `Group ${live.group.replace(/^Group\s+/i, "")}`
+    : `Seed ${item.seed}`;
+
+  const sourceNote = live
+    ? `Live stats and fixtures from API-Football · refreshed ${formatRelative(live.generatedAt)}.`
+    : "Match data is seeded. Connect the worker (set data-api-base on &lt;body&gt;) to show live fixtures.";
+
   panel.innerHTML = `
     <article class="team-card">
       <div class="team-hero">
@@ -238,33 +278,28 @@ function renderTeamPanel(item) {
         </div>
         <div>
           <h2>${item.name}</h2>
-          <div class="team-meta">${item.confederation} · FIFA rank ${item.fifaRank} · Seed ${item.seed}</div>
+          <div class="team-meta">${item.confederation} · FIFA rank ${item.fifaRank} · ${groupLabel}</div>
         </div>
       </div>
 
       <div class="chip-row" aria-label="Team form and key player">
-        <span class="chip">Form ${item.form}</span>
-        <span class="chip">Key player ${item.player}</span>
+        <span class="chip">Form ${formString}</span>
+        <span class="chip">Key player ${player}</span>
       </div>
 
       <section>
         <h3 class="section-title">Current Stats</h3>
-        <div class="stat-grid">
-          <div class="stat"><strong>${item.goalsFor}</strong><span>Goals for</span></div>
-          <div class="stat"><strong>${item.goalsAgainst}</strong><span>Goals against</span></div>
-          <div class="stat"><strong>${item.possession}</strong><span>Average possession</span></div>
-          <div class="stat"><strong>${item.xg}</strong><span>Expected goals</span></div>
-        </div>
+        ${statGrid}
       </section>
 
       <section>
         <h3 class="section-title">Next Game</h3>
         <div class="match-card">
           <div class="match-row">
-            <span class="opponent">vs ${item.opponent}</span>
-            <span>${item.date}</span>
+            <span class="opponent">vs ${nextOpponent}</span>
+            <span>${nextDate}</span>
           </div>
-          <span>${item.venue}</span>
+          <span>${nextVenue}${nextRound}</span>
         </div>
       </section>
 
@@ -275,12 +310,86 @@ function renderTeamPanel(item) {
         </ul>
       </section>
 
-      <p class="source-note">
-        All bracket nodes use country flags only. Match data is seeded until a licensed fixture/stat/watch provider is connected.
-      </p>
+      <p class="source-note">${sourceNote}</p>
     </article>
   `;
 }
 
+function insertDashes(form) {
+  return form.replace(/[A-Z]/g, "$&-").replace(/-$/, "");
+}
+
+function formatFixtureDate(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatRelative(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "just now";
+  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} h ago`;
+  return date.toLocaleString();
+}
+
+async function loadLiveData() {
+  const apiBase = document.body.dataset.apiBase?.trim();
+  if (!apiBase) return;
+
+  setLiveStatus("connecting");
+
+  try {
+    const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/snapshot`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const snapshot = await response.json();
+    mergeSnapshot(snapshot);
+    renderTeamPanel(teamById.get(selectedId));
+    setLiveStatus("live", snapshot.generatedAt);
+  } catch (err) {
+    console.warn("Live data fetch failed; falling back to seeded values.", err);
+    setLiveStatus("offline");
+  }
+}
+
+function mergeSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !snapshot.teams) return;
+  for (const item of layoutTeams) {
+    const live = snapshot.teams[item.code];
+    if (!live) continue;
+    item.live = {
+      generatedAt: snapshot.generatedAt,
+      stats: live.stats,
+      form: live.form,
+      group: live.group,
+      nextFixture: live.nextFixture,
+      topScorer: live.topScorer,
+    };
+  }
+}
+
+function setLiveStatus(state, generatedAt) {
+  const dot = document.querySelector("#live-status");
+  if (!dot) return;
+  dot.dataset.state = state;
+  const labels = {
+    connecting: "Connecting…",
+    live: generatedAt ? `Live · ${formatRelative(generatedAt)}` : "Live",
+    offline: "Seeded data",
+  };
+  dot.textContent = labels[state] ?? "";
+}
+
 renderBracket();
 renderTeamPanel(teamById.get(selectedId));
+loadLiveData();

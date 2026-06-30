@@ -1,0 +1,6 @@
+name = "world-cup-bracket-api"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# Free-tier friendly. Set API_FOOTBALL_KEY via:
+#   npx wrangler secret put API_FOOTBALL_KEY
