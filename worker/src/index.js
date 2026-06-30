@@ -88,7 +88,7 @@ async function handleSnapshot(request, env, ctx, url) {
 
   if (!refresh) {
     const cached = await cache.match(cacheKey);
-    if (cached) return withCors(cached);
+    if (cached) return withClientHeaders(cached);
   }
 
   if (!env.API_FOOTBALL_KEY) {
@@ -105,13 +105,22 @@ async function handleSnapshot(request, env, ctx, url) {
     return jsonResponse({ error: "Upstream fetch failed", detail: String(err) }, 502);
   }
 
-  const response = jsonResponse(snapshot, 200, {
-    "Cache-Control": `public, max-age=${SNAPSHOT_CACHE_TTL_SECONDS}`,
+  // The response we stash in the edge cache uses a long Cache-Control so
+  // the Cache API honors our TTL. The response we return to the browser
+  // uses no-store so clients never disk-cache a stale snapshot.
+  const cacheBody = JSON.stringify(snapshot);
+  const cacheable = new Response(cacheBody, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": `public, max-age=${SNAPSHOT_CACHE_TTL_SECONDS}`,
+    },
   });
+  ctx.waitUntil(cache.put(cacheKey, cacheable));
 
-  // Cache the *response* — the Cache API will respect the Cache-Control TTL.
-  ctx.waitUntil(cache.put(cacheKey, response.clone()));
-  return response;
+  return jsonResponse(snapshot, 200, {
+    "Cache-Control": "no-store",
+  });
 }
 
 async function buildSnapshot(apiKey, season) {
@@ -327,11 +336,13 @@ function corsHeaders() {
   };
 }
 
-function withCors(response) {
+function withClientHeaders(response) {
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(corsHeaders())) {
     headers.set(key, value);
   }
+  // Force-replace the edge-friendly Cache-Control with a browser-safe one.
+  headers.set("Cache-Control", "no-store");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
