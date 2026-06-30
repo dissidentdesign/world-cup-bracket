@@ -10,6 +10,7 @@ const API_BASE = "https://v3.football.api-sports.io";
 const LEAGUE_ID = 1; // FIFA World Cup
 const DEFAULT_SEASON = 2026;
 const SNAPSHOT_CACHE_TTL_SECONDS = 300; // 5 minutes
+const CACHE_VERSION = "v2"; // Bump whenever the snapshot shape changes.
 
 // FIFA 3-letter codes the frontend already uses. We only return teams whose
 // API-Football `code` is in this set; everything else is dropped so the
@@ -21,15 +22,43 @@ const KNOWN_CODES = new Set([
   "ECU", "GHA", "EGY", "ALG", "SWE", "NOR", "QAT", "KSA",
 ]);
 
-// API-Football occasionally uses different short names than the IOC/FIFA
-// codes our app uses. Map team-name fragments to our canonical code when
-// the upstream `code` field is missing or off.
-const NAME_FALLBACK = [
-  [/^south korea/i, "KOR"],
-  [/^korea republic/i, "KOR"],
-  [/^usa$/i, "USA"],
-  [/^united states/i, "USA"],
-];
+// API-Football's `team.code` is often an ISO 2-letter or otherwise diverges
+// from FIFA's 3-letter codes (e.g. "BR" not "BRA"). Map normalized team
+// names to our canonical FIFA codes for the 32 teams the bracket renders.
+const NAME_TO_CODE = {
+  "united states": "USA", "usa": "USA",
+  "mexico": "MEX",
+  "argentina": "ARG",
+  "germany": "GER",
+  "spain": "ESP",
+  "portugal": "POR",
+  "france": "FRA",
+  "senegal": "SEN",
+  "brazil": "BRA",
+  "canada": "CAN",
+  "england": "ENG",
+  "japan": "JPN",
+  "netherlands": "NED", "holland": "NED",
+  "morocco": "MAR",
+  "colombia": "COL",
+  "belgium": "BEL",
+  "uruguay": "URU",
+  "australia": "AUS",
+  "switzerland": "SUI",
+  "south korea": "KOR", "korea republic": "KOR", "korea, south": "KOR",
+  "croatia": "CRO",
+  "poland": "POL",
+  "denmark": "DEN",
+  "nigeria": "NGA",
+  "ecuador": "ECU",
+  "ghana": "GHA",
+  "egypt": "EGY",
+  "algeria": "ALG",
+  "sweden": "SWE",
+  "norway": "NOR",
+  "qatar": "QAT",
+  "saudi arabia": "KSA",
+};
 
 export default {
   async fetch(request, env, ctx) {
@@ -53,12 +82,13 @@ export default {
 
 async function handleSnapshot(request, env, ctx, url) {
   const season = Number(url.searchParams.get("season")) || DEFAULT_SEASON;
+  const refresh = url.searchParams.get("refresh") === "1";
   const cache = caches.default;
-  const cacheKey = new Request(`https://snapshot.cache/season=${season}`, { method: "GET" });
+  const cacheKey = new Request(`https://snapshot.cache/${CACHE_VERSION}/season=${season}`, { method: "GET" });
 
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    return withCors(cached);
+  if (!refresh) {
+    const cached = await cache.match(cacheKey);
+    if (cached) return withCors(cached);
   }
 
   if (!env.API_FOOTBALL_KEY) {
@@ -243,13 +273,20 @@ function attachTopScorers(teams, scorers) {
 
 function resolveCode(team) {
   if (!team) return null;
+  // Prefer FIFA 3-letter code when API-Football emits one of ours.
   if (team.code && KNOWN_CODES.has(team.code.toUpperCase())) {
     return team.code.toUpperCase();
   }
-  const name = team.name || "";
-  for (const [pattern, code] of NAME_FALLBACK) {
-    if (pattern.test(name)) return code;
-  }
+  // Otherwise look up by normalized name. Strip diacritics + lowercase.
+  const name = (team.name || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+  if (NAME_TO_CODE[name]) return NAME_TO_CODE[name];
+  // Fall back: try collapsing punctuation / "the".
+  const simplified = name.replace(/[^a-z]+/g, " ").replace(/\bthe\b/g, "").trim();
+  if (NAME_TO_CODE[simplified]) return NAME_TO_CODE[simplified];
   return null;
 }
 

@@ -252,10 +252,21 @@ function renderTeamPanel(item) {
     `;
 
   const next = live?.nextFixture;
-  const nextOpponent = next?.opponent ?? item.opponent;
-  const nextDate = next?.date ? formatFixtureDate(next.date) : item.date;
-  const nextVenue = next?.venue ?? item.venue;
-  const nextRound = next?.round ? `<span class="round-tag">${next.round}</span>` : "";
+  const last = live?.lastMatch;
+  const matchMode = next ? "next" : last ? "last" : "next";
+  const matchTitle = matchMode === "last" ? "Last Result" : "Next Game";
+  const matchOpponent = next?.opponent ?? last?.opponent ?? item.opponent;
+  const matchDate = next?.date
+    ? formatFixtureDate(next.date)
+    : last?.dateTs
+      ? formatFixtureDate(new Date(last.dateTs).toISOString())
+      : item.date;
+  const matchVenue = next?.venue ?? last?.venue ?? item.venue;
+  const matchTag = next?.round
+    ? `<span class="round-tag">${next.round}</span>`
+    : last?.score
+      ? `<span class="round-tag">${last.status === "FT" ? "FT" : last.status} ${last.score}</span>`
+      : "";
 
   const formString = live?.form ? insertDashes(live.form) : item.form;
   const player = live?.topScorer?.name
@@ -293,13 +304,13 @@ function renderTeamPanel(item) {
       </section>
 
       <section>
-        <h3 class="section-title">Next Game</h3>
+        <h3 class="section-title">${matchTitle}</h3>
         <div class="match-card">
           <div class="match-row">
-            <span class="opponent">vs ${nextOpponent}</span>
-            <span>${nextDate}</span>
+            <span class="opponent">${matchMode === "last" ? "vs" : "vs"} ${matchOpponent}</span>
+            <span>${matchDate}</span>
           </div>
-          <span>${nextVenue}${nextRound}</span>
+          <span>${matchVenue}${matchTag}</span>
         </div>
       </section>
 
@@ -373,6 +384,7 @@ function mergeSnapshot(snapshot) {
       form: live.form,
       group: live.group,
       nextFixture: live.nextFixture,
+      lastMatch: live.lastMatch,
       topScorer: live.topScorer,
     };
   }
