@@ -36,13 +36,15 @@ button {
 .app-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 370px;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .bracket-stage {
   position: relative;
   min-width: 0;
-  overflow: auto;
+  height: 100vh;
+  overflow: hidden;
   padding: 28px clamp(18px, 4vw, 44px) 34px;
 }
 
@@ -164,8 +166,10 @@ h1 {
 
 .bracket-wrap {
   position: relative;
-  width: min(88vh, 100%, 1040px);
-  min-width: 720px;
+  /* Fit the largest square that still leaves room for the top bar and the
+     side panel. The numbers subtract: 180px (top bar + vertical padding),
+     and the panel column (370px) + horizontal padding (~88px). */
+  width: min(calc(100vh - 180px), calc(100vw - 470px), 1040px);
   aspect-ratio: 1;
   margin: 0 auto;
 }
@@ -220,11 +224,6 @@ h1 {
     border-color 160ms ease,
     box-shadow 160ms ease,
     transform 160ms ease;
-}
-
-.team-node:hover .flag,
-.team-node:focus-visible .flag {
-  transform: scale(1.45);
 }
 
 .team-node:hover,
@@ -300,23 +299,40 @@ h1 {
   transform: scale(1.35);
 }
 
-.team-node .flag {
+.flag {
   display: grid;
   place-items: center;
   width: 100%;
   height: 100%;
   border: 0;
-  border-radius: 0;
+  border-radius: 50%;
   background: transparent;
-  font-size: 2.45rem;
   line-height: 1;
-  transform: scale(1.38);
   transition: transform 160ms ease;
+}
+
+.flag-img {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  font-size: 0;
+  transform: scale(1.04);
+}
+
+.team-node .flag {
+  font-size: 2.45rem;
+}
+
+.team-node:hover .flag,
+.team-node:focus-visible .flag {
+  transform: scale(1.18);
 }
 
 .team-panel {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-left: 1px solid rgba(247, 241, 223, 0.12);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 19rem),
@@ -379,7 +395,11 @@ h1 {
 .team-badge .flag {
   font-size: 4.4rem;
   line-height: 1;
-  transform: scale(1.2);
+}
+
+.team-badge .flag.flag-img {
+  font-size: 0;
+  transform: scale(1.02);
 }
 
 .team-meta {
@@ -515,10 +535,23 @@ h1 {
 @media (max-width: 1160px) {
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+  }
+
+  .bracket-stage {
+    height: auto;
+    overflow: visible;
+  }
+
+  .bracket-wrap {
+    width: min(calc(100vw - 40px), 720px);
   }
 
   .team-panel {
-    min-height: auto;
+    height: auto;
+    overflow: visible;
+    overscroll-behavior: auto;
     border-top: 1px solid rgba(247, 241, 223, 0.12);
     border-left: 0;
   }

@@ -243,7 +243,7 @@ function renderAdvancement() {
     node.style.setProperty("--team-color", winner.color);
     node.dataset.team = winner.id;
     node.setAttribute("aria-label", `${winner.name} advanced to Round of 16`);
-    node.innerHTML = `<span class="flag" aria-hidden="true">${winner.flag}</span>`;
+    node.innerHTML = flagMarkup(winner);
     node.addEventListener("click", () => selectTeam(winner.id));
     teamLayer.appendChild(node);
   }
@@ -272,9 +272,26 @@ function renderTeamNodes() {
 }
 
 function flagMarkup(item) {
-  return `
-    <span class="flag" aria-hidden="true">${item.flag}</span>
-  `;
+  const slug = flagSlug(item.flag);
+  if (slug) {
+    return `<span class="flag flag-img" aria-hidden="true" style="background-image:url('https://flagcdn.com/w160/${slug}.png')"></span>`;
+  }
+  return `<span class="flag" aria-hidden="true">${item.flag}</span>`;
+}
+
+// Convert a flag emoji into the slug flagcdn.com expects (lowercase 2-letter
+// ISO, or "gb-eng"/"gb-sct"/"gb-wls" for the home-nation tag sequences).
+function flagSlug(emoji) {
+  if (!emoji) return null;
+  if (emoji === "🏴󠁧󠁢󠁥󠁮󠁧󠁿") return "gb-eng";
+  if (emoji === "🏴󠁧󠁢󠁳󠁣󠁴󠁿") return "gb-sct";
+  if (emoji === "🏴󠁧󠁢󠁷󠁬󠁳󠁿") return "gb-wls";
+  const chars = [...emoji];
+  if (chars.length !== 2) return null;
+  const base = 0x1f1e6;
+  const points = chars.map((c) => c.codePointAt(0));
+  if (points.some((p) => p < base || p > base + 25)) return null;
+  return String.fromCharCode(65 + (points[0] - base), 65 + (points[1] - base)).toLowerCase();
 }
 
 function renderConnectors() {
@@ -408,7 +425,7 @@ function renderTeamPanel(item) {
     <article class="team-card">
       <div class="team-hero">
         <div class="team-badge" style="--team-color: ${item.color}">
-          <span class="flag" aria-hidden="true">${item.flag}</span>
+          ${flagMarkup(item)}
         </div>
         <div>
           <h2>${item.name}</h2>
