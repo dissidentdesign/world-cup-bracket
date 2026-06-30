@@ -222,6 +222,31 @@ function renderBracket() {
 
   renderConnectors();
   renderTeamNodes();
+  renderAdvancement();
+}
+
+function renderAdvancement() {
+  // For each R32 match pair (layout slots 2k, 2k+1), if the match is
+  // completed, place the winner's flag at the inner R32 match center
+  // (geometry.roundRadii[0]) to show advancement to R16.
+  for (let pairIndex = 0; pairIndex < layoutTeams.length / 2; pairIndex += 1) {
+    const left = layoutTeams[pairIndex * 2];
+    const right = layoutTeams[pairIndex * 2 + 1];
+    const winner = left?.advanced ? left : right?.advanced ? right : null;
+    if (!winner) continue;
+    const point = roundPoint(0, pairIndex);
+    const node = document.createElement("button");
+    node.type = "button";
+    node.className = "advance-node";
+    node.style.left = `${point.x / 10}%`;
+    node.style.top = `${point.y / 10}%`;
+    node.style.setProperty("--team-color", winner.color);
+    node.dataset.team = winner.id;
+    node.setAttribute("aria-label", `${winner.name} advanced to Round of 16`);
+    node.innerHTML = `<span class="flag" aria-hidden="true">${winner.flag}</span>`;
+    node.addEventListener("click", () => selectTeam(winner.id));
+    teamLayer.appendChild(node);
+  }
 }
 
 function renderTeamNodes() {
