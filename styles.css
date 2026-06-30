@@ -234,6 +234,36 @@ h1 {
   transform: translate(-50%, -50%) scale(1.08);
 }
 
+.team-node.is-eliminated {
+  filter: grayscale(0.85) brightness(0.55);
+  border-color: rgba(247, 241, 223, 0.25);
+}
+
+.team-node.is-eliminated::after {
+  position: absolute;
+  inset: 50% 6%;
+  height: 2px;
+  background: rgba(247, 241, 223, 0.8);
+  content: "";
+  transform: rotate(-32deg) translateY(-1px);
+  pointer-events: none;
+}
+
+.team-node.is-eliminated:hover,
+.team-node.is-eliminated:focus-visible {
+  filter: grayscale(0.6) brightness(0.75);
+}
+
+.team-node.is-advanced {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(88, 184, 131, 0.25), 0 11px 14px var(--shadow);
+}
+
+.team-node.is-selected {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(227, 177, 81, 0.32), 0 11px 14px var(--shadow);
+}
+
 .team-node .flag {
   display: grid;
   place-items: center;
@@ -320,6 +350,27 @@ h1 {
   margin-top: 8px;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.status-badge {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.status-badge.is-out {
+  background: rgba(215, 75, 75, 0.18);
+  color: #f0a4a4;
+}
+
+.status-badge.is-in {
+  background: rgba(88, 184, 131, 0.18);
+  color: var(--green);
 }
 
 .chip-row {

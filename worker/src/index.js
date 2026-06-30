@@ -10,7 +10,25 @@ const API_BASE = "https://v3.football.api-sports.io";
 const LEAGUE_ID = 1; // FIFA World Cup
 const DEFAULT_SEASON = 2026;
 const SNAPSHOT_CACHE_TTL_SECONDS = 300; // 5 minutes
-const CACHE_VERSION = "v2"; // Bump whenever the snapshot shape changes.
+const CACHE_VERSION = "v3"; // Bump whenever the snapshot shape changes.
+
+const KNOCKOUT_ROUNDS = [
+  { key: "R32", patterns: [/round of 32/i] },
+  { key: "R16", patterns: [/round of 16/i, /1\/8 finals/i] },
+  { key: "QF", patterns: [/quarter-?finals?/i, /1\/4 finals/i] },
+  { key: "SF", patterns: [/semi-?finals?/i, /1\/2 finals/i] },
+  { key: "TP", patterns: [/3rd place/i, /third place/i] },
+  { key: "F", patterns: [/^final/i] },
+];
+
+const ROUND_LABELS = {
+  R32: "Round of 32",
+  R16: "Round of 16",
+  QF: "Quarter-finals",
+  SF: "Semi-finals",
+  TP: "Third place",
+  F: "Final",
+};
 
 // FIFA 3-letter codes the frontend already uses. We only return teams whose
 // API-Football `code` is in this set; everything else is dropped so the
@@ -134,13 +152,92 @@ async function buildSnapshot(apiKey, season) {
   attachStandings(teams, standings);
   attachNextFixtures(teams, fixtures);
   attachTopScorers(teams, scorers);
+  const bracket = buildBracket(fixtures);
+  attachEliminationState(teams, bracket);
 
   return {
     generatedAt: new Date().toISOString(),
     season,
     leagueId: LEAGUE_ID,
     teams,
+    bracket,
   };
+}
+
+function classifyRound(round) {
+  if (!round) return null;
+  for (const { key, patterns } of KNOCKOUT_ROUNDS) {
+    if (patterns.some((p) => p.test(round))) return key;
+  }
+  return null;
+}
+
+function buildBracket(fixtures) {
+  const grouped = {};
+  for (const m of fixtures?.response ?? []) {
+    const key = classifyRound(m.league?.round);
+    if (!key) continue;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(m);
+  }
+
+  const rounds = [];
+  for (const { key } of KNOCKOUT_ROUNDS) {
+    const matches = grouped[key];
+    if (!matches?.length) continue;
+    matches.sort((a, b) => Date.parse(a.fixture?.date || 0) - Date.parse(b.fixture?.date || 0)
+      || (a.fixture?.id ?? 0) - (b.fixture?.id ?? 0));
+    rounds.push({
+      key,
+      name: ROUND_LABELS[key],
+      matches: matches.map(normalizeMatch),
+    });
+  }
+  return { rounds };
+}
+
+function normalizeMatch(m) {
+  const home = m.teams?.home || {};
+  const away = m.teams?.away || {};
+  const winner = home.winner === true ? "home" : away.winner === true ? "away" : null;
+  return {
+    fixtureId: m.fixture?.id ?? null,
+    date: m.fixture?.date ?? null,
+    venue: m.fixture?.venue?.name
+      ? `${m.fixture.venue.name}${m.fixture.venue.city ? `, ${m.fixture.venue.city}` : ""}`
+      : null,
+    status: m.fixture?.status?.short ?? "NS",
+    home: {
+      code: resolveCode(home),
+      name: home.name ?? null,
+      logo: home.logo ?? null,
+      score: m.goals?.home ?? null,
+    },
+    away: {
+      code: resolveCode(away),
+      name: away.name ?? null,
+      logo: away.logo ?? null,
+      score: m.goals?.away ?? null,
+    },
+    winner,
+  };
+}
+
+function attachEliminationState(teams, bracket) {
+  // A team is eliminated if their last completed knockout match was a loss.
+  for (const round of bracket.rounds) {
+    for (const match of round.matches) {
+      if (match.status !== "FT" && match.status !== "AET" && match.status !== "PEN") continue;
+      if (!match.winner) continue;
+      const losingSide = match.winner === "home" ? match.away : match.home;
+      const winningSide = match.winner === "home" ? match.home : match.away;
+      if (losingSide.code && teams[losingSide.code]) {
+        teams[losingSide.code].eliminated = true;
+        teams[losingSide.code].eliminatedAt = round.name;
+        teams[losingSide.code].eliminatedBy = winningSide.name;
+      }
+    }
+  }
 }
 
 function collectTeams(standings, fixtures) {

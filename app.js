@@ -43,13 +43,52 @@ const geometry = {
   roundRadii: [330, 250, 178, 118],
 };
 
-const layoutTeams = teams.map((item, index) => ({
+const seededByCode = new Map(teams.map((item) => [item.code, item]));
+
+// Country-name → flag emoji for WC2026 teams that aren't in the seed list.
+// Only needed for placeholders; seeded teams already carry their flag.
+const NAME_TO_FLAG = {
+  "Türkiye": "🇹🇷", "Turkey": "🇹🇷",
+  "Bosnia & Herzegovina": "🇧🇦", "Bosnia and Herzegovina": "🇧🇦",
+  "Cape Verde Islands": "🇨🇻", "Cape Verde": "🇨🇻",
+  "Jordan": "🇯🇴",
+  "South Africa": "🇿🇦",
+  "Paraguay": "🇵🇾",
+  "Ivory Coast": "🇨🇮", "Côte d'Ivoire": "🇨🇮",
+  "Iran": "🇮🇷",
+  "Tunisia": "🇹🇳",
+  "Mali": "🇲🇱",
+  "Costa Rica": "🇨🇷",
+  "Panama": "🇵🇦",
+  "Curaçao": "🇨🇼",
+  "Haiti": "🇭🇹",
+  "Jamaica": "🇯🇲",
+  "Honduras": "🇭🇳",
+  "New Zealand": "🇳🇿",
+  "Uzbekistan": "🇺🇿",
+  "Iraq": "🇮🇶",
+  "Austria": "🇦🇹",
+  "Cameroon": "🇨🇲",
+  "DR Congo": "🇨🇩", "Democratic Republic of Congo": "🇨🇩", "Congo DR": "🇨🇩",
+  "Bolivia": "🇧🇴",
+  "Peru": "🇵🇪",
+  "Chile": "🇨🇱",
+  "Venezuela": "🇻🇪",
+  "Hungary": "🇭🇺",
+  "Czech Republic": "🇨🇿", "Czechia": "🇨🇿",
+  "Serbia": "🇷🇸",
+  "Wales": "🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+  "Scotland": "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+  "Republic of Ireland": "🇮🇪", "Ireland": "🇮🇪",
+};
+
+let layoutTeams = teams.map((item, index) => ({
   ...item,
   slot: index,
   angle: geometry.startAngle + (360 / teams.length) * index,
 }));
 
-const teamById = new Map(layoutTeams.map((item) => [item.id, item]));
+let teamById = new Map(layoutTeams.map((item) => [item.id, item]));
 
 const linesSvg = document.querySelector("#bracket-lines");
 const teamLayer = document.querySelector("#team-layer");
@@ -165,12 +204,17 @@ function renderTeamNodes() {
     const point = teamPosition(item);
     const node = document.createElement("button");
     node.type = "button";
-    node.className = "team-node";
+    const classes = ["team-node"];
+    if (item.eliminated) classes.push("is-eliminated");
+    if (item.advanced) classes.push("is-advanced");
+    if (item.id === selectedId) classes.push("is-selected");
+    node.className = classes.join(" ");
     node.style.left = `${point.x / 10}%`;
     node.style.top = `${point.y / 10}%`;
     node.style.setProperty("--team-color", item.color);
     node.dataset.team = item.id;
-    node.setAttribute("aria-label", `Open ${item.name} details`);
+    const labelSuffix = item.eliminated ? " (eliminated)" : item.advanced ? " (advanced)" : "";
+    node.setAttribute("aria-label", `Open ${item.name} details${labelSuffix}`);
     node.innerHTML = flagMarkup(item);
     node.addEventListener("click", () => selectTeam(item.id));
     teamLayer.appendChild(node);
@@ -227,6 +271,9 @@ function addPath(d) {
 
 function selectTeam(id) {
   selectedId = id;
+  teamLayer.querySelectorAll(".team-node").forEach((node) => {
+    node.classList.toggle("is-selected", node.dataset.team === id);
+  });
   renderTeamPanel(teamById.get(id));
 }
 
@@ -253,20 +300,40 @@ function renderTeamPanel(item) {
 
   const next = live?.nextFixture;
   const last = live?.lastMatch;
-  const matchMode = next ? "next" : last ? "last" : "next";
+  const bracket = item.bracketMatch;
+  // Prefer the team's R32 bracketMatch if we have it (covers placeholder teams
+  // that have no per-team live data). Fall back to the per-team next/last.
+  const showBracket = bracket && (!next || bracket.isCompleted);
+  const matchMode = showBracket
+    ? bracket.isCompleted ? "last" : "next"
+    : next ? "next" : last ? "last" : "next";
   const matchTitle = matchMode === "last" ? "Last Result" : "Next Game";
-  const matchOpponent = next?.opponent ?? last?.opponent ?? item.opponent;
-  const matchDate = next?.date
-    ? formatFixtureDate(next.date)
-    : last?.dateTs
-      ? formatFixtureDate(new Date(last.dateTs).toISOString())
-      : item.date;
-  const matchVenue = next?.venue ?? last?.venue ?? item.venue;
-  const matchTag = next?.round
-    ? `<span class="round-tag">${next.round}</span>`
-    : last?.score
-      ? `<span class="round-tag">${last.status === "FT" ? "FT" : last.status} ${last.score}</span>`
-      : "";
+
+  const matchOpponent = showBracket
+    ? bracket.opponent
+    : next?.opponent ?? last?.opponent ?? item.opponent;
+
+  const matchDate = showBracket && bracket.date
+    ? formatFixtureDate(bracket.date)
+    : next?.date
+      ? formatFixtureDate(next.date)
+      : last?.dateTs
+        ? formatFixtureDate(new Date(last.dateTs).toISOString())
+        : item.date;
+
+  const matchVenue = showBracket
+    ? bracket.venue ?? item.venue
+    : next?.venue ?? last?.venue ?? item.venue;
+
+  const matchTag = showBracket
+    ? bracket.isCompleted
+      ? `<span class="round-tag">${bracket.status} ${bracket.myScore}-${bracket.oppScore}${bracket.isWinner ? " · WIN" : " · OUT"}</span>`
+      : `<span class="round-tag">Round of 32</span>`
+    : next?.round
+      ? `<span class="round-tag">${next.round}</span>`
+      : last?.score
+        ? `<span class="round-tag">${last.status === "FT" ? "FT" : last.status} ${last.score}</span>`
+        : "";
 
   const formString = live?.form ? insertDashes(live.form) : item.form;
   const player = live?.topScorer?.name
@@ -275,7 +342,13 @@ function renderTeamPanel(item) {
 
   const groupLabel = live?.group
     ? `Group ${live.group.replace(/^Group\s+/i, "")}`
-    : `Seed ${item.seed}`;
+    : item.seed && item.seed !== "—" ? `Seed ${item.seed}` : "WC2026";
+
+  const statusBadge = item.eliminated
+    ? `<span class="status-badge is-out">Eliminated${item.eliminatedAt ? ` · ${item.eliminatedAt}` : ""}</span>`
+    : item.advanced
+      ? `<span class="status-badge is-in">Advanced</span>`
+      : "";
 
   const sourceNote = live
     ? `Live stats and fixtures from API-Football · refreshed ${formatRelative(live.generatedAt)}.`
@@ -290,6 +363,7 @@ function renderTeamPanel(item) {
         <div>
           <h2>${item.name}</h2>
           <div class="team-meta">${item.confederation} · FIFA rank ${item.fifaRank} · ${groupLabel}</div>
+          ${statusBadge}
         </div>
       </div>
 
@@ -364,7 +438,9 @@ async function loadLiveData() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const snapshot = await response.json();
+    applyBracketLayout(snapshot.bracket);
     mergeSnapshot(snapshot);
+    renderBracket();
     renderTeamPanel(teamById.get(selectedId));
     setLiveStatus("live", snapshot.generatedAt);
   } catch (err) {
@@ -387,7 +463,93 @@ function mergeSnapshot(snapshot) {
       lastMatch: live.lastMatch,
       topScorer: live.topScorer,
     };
+    if (live.eliminated) {
+      item.eliminated = true;
+      item.eliminatedAt = live.eliminatedAt;
+      item.eliminatedBy = live.eliminatedBy;
+    }
   }
+}
+
+function applyBracketLayout(bracket) {
+  const r32 = bracket?.rounds?.find((r) => r.key === "R32");
+  if (!r32 || r32.matches.length !== 16) return;
+
+  const newLayout = [];
+  r32.matches.forEach((match, matchIndex) => {
+    newLayout.push(buildLeaf(match, "home", matchIndex * 2, r32.matches.length * 2));
+    newLayout.push(buildLeaf(match, "away", matchIndex * 2 + 1, r32.matches.length * 2));
+  });
+
+  layoutTeams = newLayout;
+  teamById = new Map(layoutTeams.map((item) => [item.id, item]));
+
+  if (!teamById.has(selectedId)) {
+    selectedId = layoutTeams[0].id;
+  }
+}
+
+function buildLeaf(match, side, slot, totalSlots) {
+  const mine = match[side];
+  const other = match[side === "home" ? "away" : "home"];
+  const seeded = mine.code ? seededByCode.get(mine.code) : null;
+  const base = seeded ? { ...seeded } : placeholderTeam(mine);
+  const angle = geometry.startAngle + (360 / totalSlots) * slot;
+
+  const isCompleted = ["FT", "AET", "PEN"].includes(match.status);
+  const isWinner = isCompleted && match.winner === side;
+  const isLoser = isCompleted && match.winner && match.winner !== side;
+
+  return {
+    ...base,
+    slot,
+    angle,
+    bracketMatch: {
+      opponent: other.name,
+      opponentCode: other.code,
+      opponentLogo: other.logo,
+      venue: match.venue,
+      date: match.date,
+      status: match.status,
+      myScore: mine.score,
+      oppScore: other.score,
+      isCompleted,
+      isWinner,
+    },
+    eliminated: isLoser || base.eliminated || false,
+    advanced: isWinner,
+    apiLogo: mine.logo,
+  };
+}
+
+function placeholderTeam(side) {
+  const name = side.name || "Unknown";
+  const code = side.code || (name.match(/[A-Z]/g)?.slice(0, 3).join("") || name.slice(0, 3)).toUpperCase();
+  return {
+    id: `unk-${(side.code || name).toLowerCase().replace(/[^a-z0-9]/g, "")}`,
+    name,
+    code,
+    flag: NAME_TO_FLAG[name] || "🏳️",
+    color: "#2d3138",
+    seed: "—",
+    confederation: "—",
+    fifaRank: "—",
+    form: "—",
+    goalsFor: "—",
+    goalsAgainst: "—",
+    possession: "—",
+    xg: "—",
+    player: "—",
+    opponent: "TBD",
+    date: "TBD",
+    venue: "TBD",
+    watch: [
+      ["TV", "FOX / FS1"],
+      ["Spanish", "Telemundo / Universo"],
+      ["Streaming", "Fox Sports app, Peacock"],
+    ],
+    live: null,
+  };
 }
 
 function setLiveStatus(state, generatedAt) {
