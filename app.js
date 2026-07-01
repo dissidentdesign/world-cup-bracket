@@ -395,7 +395,7 @@ function renderTeamPanel(item) {
   const path = renderTournamentPath(live, item);
 
   const sourceNote = live
-    ? `Live data via API-Football · refreshed ${formatRelative(live.generatedAt)}.`
+    ? `Live data via ESPN · refreshed ${formatRelative(live.generatedAt)}.`
     : "Match data is seeded. Connect the worker (set data-api-base on &lt;body&gt;) to show live fixtures.";
 
   panel.innerHTML = `
