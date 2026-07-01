@@ -466,8 +466,9 @@ function pathRow(f) {
   const result = f.result;
   const resultClass = result === "W" ? "is-win" : result === "L" ? "is-loss" : result === "D" ? "is-draw" : "is-upcoming";
   const resultLabel = result ?? shortStatus(f.status);
+  const decidedBy = /pens/i.test(f.status || "") ? " (P)" : /aet/i.test(f.status || "") ? " (AET)" : "";
   const scoreText = f.myScore != null && f.oppScore != null
-    ? `${f.myScore}–${f.oppScore}`
+    ? `${f.myScore}–${f.oppScore}${decidedBy}`
     : "vs";
   const roundShort = shortRound(f.round);
   const dateText = f.date ? formatFixtureDate(f.date) : "";
@@ -658,9 +659,12 @@ function buildLeaf(match, side, slot, totalSlots) {
   const base = seeded ? { ...seeded } : placeholderTeam(mine);
   const angle = geometry.startAngle + (360 / totalSlots) * slot;
 
-  const isCompleted = ["FT", "AET", "PEN"].includes(match.status);
+  // A resolved winner is the reliable "match completed" signal. Status
+  // strings vary (FT, AET, FT-Pens, …) and a whitelist misses cases; if
+  // ESPN has told us who advanced, treat the match as done.
+  const isCompleted = !!match.winner;
   const isWinner = isCompleted && match.winner === side;
-  const isLoser = isCompleted && match.winner && match.winner !== side;
+  const isLoser = isCompleted && match.winner !== side;
 
   return {
     ...base,

@@ -262,8 +262,10 @@ function attachTeamFixtures(teams, events) {
     push(teams, m.home.code, m, "home", m.away);
     push(teams, m.away.code, m, "away", m.home);
   }
+  // Newest first so the panel opens with the upcoming (or most recent)
+  // fixture at the top of the Tournament Path list.
   for (const team of Object.values(teams)) {
-    (team.fixtures || []).sort((a, b) => a.dateTs - b.dateTs);
+    (team.fixtures || []).sort((a, b) => b.dateTs - a.dateTs);
   }
 }
 
