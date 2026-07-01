@@ -9,9 +9,10 @@
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world";
 const ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings";
 const DEFAULT_SEASON = 2026;
-const SNAPSHOT_CACHE_TTL_SECONDS = 900; // 15 minutes
-const STALE_CACHE_TTL_SECONDS = 86400;  // 24h stale-on-error fallback
-const CACHE_VERSION = "v6-espn";
+const SNAPSHOT_CACHE_TTL_SECONDS = 900;      // 15 minutes when nothing is live
+const LIVE_CACHE_TTL_SECONDS = 30;           // 30 seconds while any match is in progress
+const STALE_CACHE_TTL_SECONDS = 86400;       // 24h stale-on-error fallback
+const CACHE_VERSION = "v7-live";
 
 const ROUND_SLUG_TO_KEY = {
   "round-of-32": "R32",
@@ -77,11 +78,12 @@ async function handleSnapshot(request, env, ctx, url) {
   }
 
   const body = JSON.stringify(snapshot);
+  const freshTtl = snapshot.hasLive ? LIVE_CACHE_TTL_SECONDS : SNAPSHOT_CACHE_TTL_SECONDS;
   ctx.waitUntil(cache.put(cacheKey, new Response(body, {
     status: 200,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": `public, max-age=${SNAPSHOT_CACHE_TTL_SECONDS}`,
+      "Cache-Control": `public, max-age=${freshTtl}`,
     },
   })));
   ctx.waitUntil(cache.put(staleKey, new Response(body, {
@@ -116,10 +118,23 @@ async function buildSnapshot(season) {
   attachNextFixture(teams, normalizedEvents);
   attachTopScorers(teams, events);
 
+  const liveMatches = normalizedEvents
+    .filter((m) => m.live)
+    .map((m) => ({
+      eventId: m.eventId,
+      status: m.status,
+      displayClock: m.displayClock,
+      home: { code: m.home.code, name: m.home.name, score: m.home.score },
+      away: { code: m.away.code, name: m.away.name, score: m.away.score },
+      round: m.roundLabel || m.round,
+    }));
+
   return {
     generatedAt: new Date().toISOString(),
     season,
     upstream: "espn",
+    hasLive: liveMatches.length > 0,
+    liveMatches,
     teams,
     bracket,
   };
@@ -209,7 +224,8 @@ function normalizeEvent(e) {
   const home = comp.competitors?.find((c) => c.homeAway === "home");
   const away = comp.competitors?.find((c) => c.homeAway === "away");
   if (!home || !away) return null;
-  const status = comp.status?.type || {};
+  const statusObj = comp.status || {};
+  const status = statusObj.type || {};
   const roundKey = ROUND_SLUG_TO_KEY[e.season?.slug] || null;
   const roundLabel = ROUND_KEY_LABEL[roundKey] || cleanRoundName(e.season?.slug);
   const venue = comp.venue?.fullName
@@ -225,7 +241,11 @@ function normalizeEvent(e) {
     roundKey,
     roundLabel,
     status: status.shortDetail || status.detail || "TBD",
-    statusState: status.state || null,
+    statusState: status.state || null,             // "pre" | "in" | "post"
+    statusDetail: status.detail || null,           // "1st Half", "Halftime", "FT", …
+    displayClock: statusObj.displayClock || null,  // "38'", "HT", "90'+3'"
+    period: statusObj.period ?? null,
+    live: status.state === "in",
     completed: status.completed === true,
     winner,
     venue,
@@ -291,6 +311,9 @@ function push(teams, code, match, side, opp) {
     opponentCode: opp.code,
     venue: match.venue,
     status: match.status,
+    statusState: match.statusState,
+    displayClock: match.displayClock,
+    live: match.live,
     myScore: mine.score,
     oppScore: opp.score,
     result,
@@ -339,6 +362,10 @@ function buildBracket(events) {
         date: m.date,
         venue: m.venue,
         status: m.status,
+        statusState: m.statusState,
+        displayClock: m.displayClock,
+        period: m.period,
+        live: m.live,
         home: { code: m.home.code, name: m.home.name, logo: m.home.logo, score: m.home.score },
         away: { code: m.away.code, name: m.away.name, logo: m.away.logo, score: m.away.score },
         winner: m.winner,
@@ -428,7 +455,9 @@ function attachTopScorers(teams, events) {
 async function espnFetch(url) {
   const response = await fetch(url, {
     headers: { Accept: "application/json" },
-    cf: { cacheTtl: 60, cacheEverything: true },
+    // Keep upstream cache short so live match clocks/scores can update. Our
+    // snapshot cache above already dedupes bursts of clients.
+    cf: { cacheTtl: 15, cacheEverything: true },
   });
   if (!response.ok) throw new Error(`ESPN ${url} ${response.status}`);
   return response.json();

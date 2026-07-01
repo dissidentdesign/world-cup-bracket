@@ -138,6 +138,16 @@ h1 {
   animation: live-pulse 2.4s ease-in-out infinite;
 }
 
+.live-status[data-match="on"] {
+  color: #ff9a9d;
+}
+
+.live-status[data-match="on"]::before {
+  background: #ff5a5f;
+  box-shadow: 0 0 10px #ff5a5f;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
 .live-status[data-state="connecting"] {
   color: var(--gold);
 }
@@ -256,6 +266,17 @@ h1 {
 .team-node.is-advanced {
   border-color: var(--green);
   box-shadow: 0 0 0 2px rgba(88, 184, 131, 0.25), 0 11px 14px var(--shadow);
+}
+
+.team-node.is-live {
+  border-color: #ff5a5f;
+  box-shadow: 0 0 0 3px rgba(255, 90, 95, 0.35), 0 11px 14px var(--shadow);
+  animation: node-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes node-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(255, 90, 95, 0.35), 0 11px 14px var(--shadow); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 90, 95, 0.08), 0 11px 14px var(--shadow); }
 }
 
 .team-node.is-selected {
@@ -482,6 +503,22 @@ h1 {
 .path-chip.is-upcoming {
   background: rgba(255, 255, 255, 0.06);
   color: var(--muted);
+}
+
+.path-chip.is-live {
+  background: rgba(255, 90, 95, 0.22);
+  color: #ff9a9d;
+  animation: chip-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes chip-live-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+.path-row.is-live-row {
+  border-color: rgba(255, 90, 95, 0.35);
+  background: linear-gradient(180deg, rgba(255, 90, 95, 0.06), var(--panel-strong));
 }
 
 .path-round {

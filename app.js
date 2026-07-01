@@ -253,13 +253,17 @@ function renderTeamNodes() {
     const classes = ["team-node"];
     if (item.eliminated) classes.push("is-eliminated");
     if (item.advanced) classes.push("is-advanced");
+    if (item.live) classes.push("is-live");
     if (item.id === selectedId) classes.push("is-selected");
     node.className = classes.join(" ");
     node.style.left = `${point.x / 10}%`;
     node.style.top = `${point.y / 10}%`;
     node.style.setProperty("--team-color", item.color);
     node.dataset.team = item.id;
-    const labelSuffix = item.eliminated ? " (eliminated)" : item.advanced ? " (advanced)" : "";
+    const labelSuffix = item.live
+      ? ` (live · ${item.bracketMatch?.displayClock || ""})`
+      : item.eliminated ? " (eliminated)"
+      : item.advanced ? " (advanced)" : "";
     node.setAttribute("aria-label", `Open ${item.name} details${labelSuffix}`);
     node.innerHTML = flagMarkup(item);
     node.addEventListener("click", () => selectTeam(item.id));
@@ -463,24 +467,40 @@ function renderTournamentPath(live, item) {
 }
 
 function pathRow(f) {
+  const isLive = f.live === true || f.statusState === "in";
   const result = f.result;
-  const resultClass = result === "W" ? "is-win" : result === "L" ? "is-loss" : result === "D" ? "is-draw" : "is-upcoming";
-  const resultLabel = result ?? shortStatus(f.status);
+  let resultClass;
+  let resultLabel;
+  if (isLive) {
+    resultClass = "is-live";
+    resultLabel = "LIVE";
+  } else if (result) {
+    resultClass = result === "W" ? "is-win" : result === "L" ? "is-loss" : "is-draw";
+    resultLabel = result;
+  } else {
+    resultClass = "is-upcoming";
+    resultLabel = shortStatus(f.status);
+  }
   const decidedBy = /pens/i.test(f.status || "") ? " (P)" : /aet/i.test(f.status || "") ? " (AET)" : "";
-  const scoreText = f.myScore != null && f.oppScore != null
-    ? `${f.myScore}–${f.oppScore}${decidedBy}`
-    : "vs";
+  const hasScore = f.myScore != null && f.oppScore != null;
+  const scoreText = isLive && hasScore
+    ? `${f.myScore}–${f.oppScore}`
+    : hasScore && result
+      ? `${f.myScore}–${f.oppScore}${decidedBy}`
+      : "vs";
   const roundShort = shortRound(f.round);
-  const dateText = f.date ? formatFixtureDate(f.date) : "";
+  const dateText = isLive
+    ? `⏱ ${f.displayClock || "LIVE"}`
+    : f.date ? formatFixtureDate(f.date) : "";
   const venueText = f.venue || "";
   const metaParts = [dateText, venueText].filter(Boolean);
-  const upcoming = !result;
+  const upcoming = !result && !isLive;
   const broadcasts = Array.isArray(f.broadcasts) ? f.broadcasts.filter(Boolean) : [];
-  const watchLine = upcoming && broadcasts.length
+  const watchLine = (upcoming || isLive) && broadcasts.length
     ? `<span class="path-watch">📺 ${broadcasts.join(" · ")}</span>`
     : "";
   return `
-    <li class="path-row">
+    <li class="path-row${isLive ? " is-live-row" : ""}">
       <span class="path-chip ${resultClass}" aria-label="Result ${resultLabel}">${resultLabel}</span>
       <span class="path-round">${roundShort}</span>
       <span class="path-score"><strong>${scoreText}</strong> ${f.opponent}</span>
@@ -566,6 +586,8 @@ function formatRelative(iso) {
   return date.toLocaleString();
 }
 
+let livePollHandle = null;
+
 async function loadLiveData() {
   const apiBase = document.body.dataset.apiBase?.trim();
   if (!apiBase) return;
@@ -582,11 +604,22 @@ async function loadLiveData() {
     mergeSnapshot(snapshot);
     renderBracket();
     renderTeamPanel(teamById.get(selectedId));
-    setLiveStatus("live", snapshot.generatedAt);
+    const liveCount = Array.isArray(snapshot.liveMatches) ? snapshot.liveMatches.length : 0;
+    setLiveStatus(liveCount > 0 ? "live-match" : "live", snapshot.generatedAt, liveCount);
+    scheduleLivePoll(snapshot.hasLive === true);
   } catch (err) {
     console.warn("Live data fetch failed; falling back to seeded values.", err);
     setLiveStatus("offline");
+    // Retry in a minute so a transient blip doesn't strand the page.
+    scheduleLivePoll(false, 60_000);
   }
+}
+
+function scheduleLivePoll(hasLive, delayMs) {
+  if (livePollHandle) clearTimeout(livePollHandle);
+  // Poll every 30s while a match is in progress, otherwise every 5 min.
+  const delay = delayMs ?? (hasLive ? 30_000 : 300_000);
+  livePollHandle = setTimeout(loadLiveData, delay);
 }
 
 function mergeSnapshot(snapshot) {
@@ -665,6 +698,7 @@ function buildLeaf(match, side, slot, totalSlots) {
   const isCompleted = !!match.winner;
   const isWinner = isCompleted && match.winner === side;
   const isLoser = isCompleted && match.winner !== side;
+  const isLive = match.live === true || match.statusState === "in";
 
   return {
     ...base,
@@ -677,6 +711,8 @@ function buildLeaf(match, side, slot, totalSlots) {
       venue: match.venue,
       date: match.date,
       status: match.status,
+      displayClock: match.displayClock,
+      isLive,
       myScore: mine.score,
       oppScore: other.score,
       isCompleted,
@@ -684,6 +720,7 @@ function buildLeaf(match, side, slot, totalSlots) {
     },
     eliminated: isLoser || base.eliminated || false,
     advanced: isWinner,
+    live: isLive,
     apiLogo: mine.logo,
   };
 }
@@ -713,13 +750,16 @@ function placeholderTeam(side) {
   };
 }
 
-function setLiveStatus(state, generatedAt) {
+function setLiveStatus(state, generatedAt, liveCount = 0) {
   const dot = document.querySelector("#live-status");
   if (!dot) return;
-  dot.dataset.state = state;
+  dot.dataset.state = state === "live-match" ? "live" : state;
+  if (state === "live-match") dot.dataset.match = "on";
+  else delete dot.dataset.match;
   const labels = {
     connecting: "Connecting…",
     live: generatedAt ? `Live · ${formatRelative(generatedAt)}` : "Live",
+    "live-match": `⏱ ${liveCount} live · updates every 30s`,
     offline: "Seeded data",
   };
   dot.textContent = labels[state] ?? "";
