@@ -510,6 +510,22 @@ h1 {
   line-height: 1.4;
 }
 
+.path-watch {
+  grid-column: 2 / 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(88, 184, 131, 0.14);
+  color: var(--green);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  justify-self: start;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

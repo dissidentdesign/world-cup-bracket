@@ -1,28 +1,30 @@
-// Cloudflare Worker: API-Football proxy for the World Cup bracket app.
+// Cloudflare Worker: ESPN proxy for the World Cup bracket app.
 //
-// Exposes one endpoint, GET /api/snapshot, which returns a normalized JSON
-// blob keyed by FIFA 3-letter code. Upstream calls hit API-Football
-// (v3.football.api-sports.io) using a key stored as a Worker secret.
-// Responses are cached at the edge so a real surge of users costs us only a
-// handful of upstream calls per refresh interval.
+// ESPN's public scoreboard/standings/teams endpoints don't require auth and
+// aren't rate-limited the way API-Football is. We fetch three endpoints,
+// normalize into the snapshot shape the frontend consumes, and cache at the
+// edge for 15 minutes. A long-lived stale cache serves stale data if ESPN
+// ever errors so the page keeps working.
 
-const API_BASE = "https://v3.football.api-sports.io";
-const LEAGUE_ID = 1; // FIFA World Cup
+const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world";
+const ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings";
 const DEFAULT_SEASON = 2026;
 const SNAPSHOT_CACHE_TTL_SECONDS = 900; // 15 minutes
-const STALE_CACHE_TTL_SECONDS = 86400; // Serve stale snapshots for 24h if upstream errors.
-const CACHE_VERSION = "v5"; // Bump whenever the snapshot shape changes.
+const STALE_CACHE_TTL_SECONDS = 86400;  // 24h stale-on-error fallback
+const CACHE_VERSION = "v6-espn";
 
-const KNOCKOUT_ROUNDS = [
-  { key: "R32", patterns: [/round of 32/i] },
-  { key: "R16", patterns: [/round of 16/i, /1\/8 finals/i] },
-  { key: "QF", patterns: [/quarter-?finals?/i, /1\/4 finals/i] },
-  { key: "SF", patterns: [/semi-?finals?/i, /1\/2 finals/i] },
-  { key: "TP", patterns: [/3rd place/i, /third place/i] },
-  { key: "F", patterns: [/^final/i] },
-];
-
-const ROUND_LABELS = {
+const ROUND_SLUG_TO_KEY = {
+  "round-of-32": "R32",
+  "round-of-16": "R16",
+  "quarter-finals": "QF",
+  "quarterfinals": "QF",
+  "semi-finals": "SF",
+  "semifinals": "SF",
+  "third-place": "TP",
+  "final": "F",
+};
+const ROUND_KEY_ORDER = ["R32", "R16", "QF", "SF", "TP", "F"];
+const ROUND_KEY_LABEL = {
   R32: "Round of 32",
   R16: "Round of 16",
   QF: "Quarter-finals",
@@ -31,70 +33,18 @@ const ROUND_LABELS = {
   F: "Final",
 };
 
-// FIFA 3-letter codes the frontend already uses. We only return teams whose
-// API-Football `code` is in this set; everything else is dropped so the
-// bracket stays clean even if the upstream returns extras.
-const KNOWN_CODES = new Set([
-  "USA", "MEX", "ARG", "GER", "ESP", "POR", "FRA", "SEN",
-  "BRA", "CAN", "ENG", "JPN", "NED", "MAR", "COL", "BEL",
-  "URU", "AUS", "SUI", "KOR", "CRO", "POL", "DEN", "NGA",
-  "ECU", "GHA", "EGY", "ALG", "SWE", "NOR", "QAT", "KSA",
-]);
-
-// API-Football's `team.code` is often an ISO 2-letter or otherwise diverges
-// from FIFA's 3-letter codes (e.g. "BR" not "BRA"). Map normalized team
-// names to our canonical FIFA codes for the 32 teams the bracket renders.
-const NAME_TO_CODE = {
-  "united states": "USA", "usa": "USA",
-  "mexico": "MEX",
-  "argentina": "ARG",
-  "germany": "GER",
-  "spain": "ESP",
-  "portugal": "POR",
-  "france": "FRA",
-  "senegal": "SEN",
-  "brazil": "BRA",
-  "canada": "CAN",
-  "england": "ENG",
-  "japan": "JPN",
-  "netherlands": "NED", "holland": "NED",
-  "morocco": "MAR",
-  "colombia": "COL",
-  "belgium": "BEL",
-  "uruguay": "URU",
-  "australia": "AUS",
-  "switzerland": "SUI",
-  "south korea": "KOR", "korea republic": "KOR", "korea, south": "KOR",
-  "croatia": "CRO",
-  "poland": "POL",
-  "denmark": "DEN",
-  "nigeria": "NGA",
-  "ecuador": "ECU",
-  "ghana": "GHA",
-  "egypt": "EGY",
-  "algeria": "ALG",
-  "sweden": "SWE",
-  "norway": "NOR",
-  "qatar": "QAT",
-  "saudi arabia": "KSA",
-};
-
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
-
     const url = new URL(request.url);
-
     if (url.pathname === "/api/snapshot" && request.method === "GET") {
       return handleSnapshot(request, env, ctx, url);
     }
-
     if (url.pathname === "/api/health") {
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true, upstream: "espn" });
     }
-
     return jsonResponse({ error: "Not found" }, 404);
   },
 };
@@ -111,20 +61,10 @@ async function handleSnapshot(request, env, ctx, url) {
     if (cached) return withClientHeaders(cached);
   }
 
-  if (!env.API_FOOTBALL_KEY) {
-    return jsonResponse(
-      { error: "Worker not configured: API_FOOTBALL_KEY secret is missing." },
-      500,
-    );
-  }
-
   let snapshot;
   try {
-    snapshot = await buildSnapshot(env.API_FOOTBALL_KEY, season);
+    snapshot = await buildSnapshot(season);
   } catch (err) {
-    // Upstream failed (usually rate-limit). Fall back to the 24h stale
-    // cache if we have one, so the page keeps working instead of going
-    // dark until the quota resets.
     const stale = await cache.match(staleKey);
     if (stale) {
       const body = await stale.text();
@@ -137,8 +77,6 @@ async function handleSnapshot(request, env, ctx, url) {
   }
 
   const body = JSON.stringify(snapshot);
-
-  // Fresh copy for the edge (5-min TTL).
   ctx.waitUntil(cache.put(cacheKey, new Response(body, {
     status: 200,
     headers: {
@@ -146,8 +84,6 @@ async function handleSnapshot(request, env, ctx, url) {
       "Cache-Control": `public, max-age=${SNAPSHOT_CACHE_TTL_SECONDS}`,
     },
   })));
-
-  // Long-lived stale copy, only served when upstream errors.
   ctx.waitUntil(cache.put(staleKey, new Response(body, {
     status: 200,
     headers: {
@@ -156,317 +92,209 @@ async function handleSnapshot(request, env, ctx, url) {
     },
   })));
 
-  return jsonResponse(snapshot, 200, {
-    "Cache-Control": "no-store",
-  });
+  return jsonResponse(snapshot, 200, { "Cache-Control": "no-store" });
 }
 
-async function buildSnapshot(apiKey, season) {
-  const [standings, fixtures, scorers, assisters] = await Promise.all([
-    apiFootball(apiKey, "/standings", { league: LEAGUE_ID, season }),
-    apiFootball(apiKey, "/fixtures", { league: LEAGUE_ID, season }),
-    apiFootball(apiKey, "/players/topscorers", { league: LEAGUE_ID, season }),
-    apiFootball(apiKey, "/players/topassists", { league: LEAGUE_ID, season }),
+async function buildSnapshot(season) {
+  // WC2026 runs June 11 - July 19, 2026. Broaden by a couple of days to be safe.
+  const dates = `${season}0601-${season}0725`;
+  const [scoreboardWide, standings, teamsData] = await Promise.all([
+    espnFetch(`${ESPN_BASE}/scoreboard?dates=${dates}&limit=200`),
+    espnFetch(ESPN_STANDINGS),
+    espnFetch(`${ESPN_BASE}/teams?limit=64`),
   ]);
+  const events = scoreboardWide?.events || [];
 
-  const teams = collectTeams(standings, fixtures);
+  const teams = collectTeams(teamsData);
   attachStandings(teams, standings);
-  attachNextFixtures(teams, fixtures);
-  attachTopScorers(teams, scorers);
-  attachTopAssisters(teams, assisters);
-  attachTeamFixtures(teams, fixtures);
+  const normalizedEvents = events.map(normalizeEvent).filter(Boolean);
+  attachTeamFixtures(teams, normalizedEvents);
   attachAggregateStats(teams);
-  attachGroupStandings(teams, fixtures);
-  const bracket = buildBracket(fixtures);
+  const bracket = buildBracket(normalizedEvents);
   attachEliminationState(teams, bracket);
   attachTeamStage(teams, bracket);
+  attachNextFixture(teams, normalizedEvents);
+  attachTopScorers(teams, events);
 
   return {
     generatedAt: new Date().toISOString(),
     season,
-    leagueId: LEAGUE_ID,
+    upstream: "espn",
     teams,
     bracket,
   };
 }
 
-function classifyRound(round) {
-  if (!round) return null;
-  for (const { key, patterns } of KNOCKOUT_ROUNDS) {
-    if (patterns.some((p) => p.test(round))) return key;
-  }
-  return null;
-}
+// ---------- team seed ----------
 
-function buildBracket(fixtures) {
-  const grouped = {};
-  for (const m of fixtures?.response ?? []) {
-    const key = classifyRound(m.league?.round);
-    if (!key) continue;
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(m);
-  }
-
-  const rounds = [];
-  for (const { key } of KNOCKOUT_ROUNDS) {
-    const matches = grouped[key];
-    if (!matches?.length) continue;
-    matches.sort((a, b) => Date.parse(a.fixture?.date || 0) - Date.parse(b.fixture?.date || 0)
-      || (a.fixture?.id ?? 0) - (b.fixture?.id ?? 0));
-    rounds.push({
-      key,
-      name: ROUND_LABELS[key],
-      matches: matches.map(normalizeMatch),
-    });
-  }
-  return { rounds };
-}
-
-function normalizeMatch(m) {
-  const home = m.teams?.home || {};
-  const away = m.teams?.away || {};
-  const winner = home.winner === true ? "home" : away.winner === true ? "away" : null;
-  return {
-    fixtureId: m.fixture?.id ?? null,
-    date: m.fixture?.date ?? null,
-    venue: m.fixture?.venue?.name
-      ? `${m.fixture.venue.name}${m.fixture.venue.city ? `, ${m.fixture.venue.city}` : ""}`
-      : null,
-    status: m.fixture?.status?.short ?? "NS",
-    home: {
-      code: resolveCode(home),
-      name: home.name ?? null,
-      logo: home.logo ?? null,
-      score: m.goals?.home ?? null,
-    },
-    away: {
-      code: resolveCode(away),
-      name: away.name ?? null,
-      logo: away.logo ?? null,
-      score: m.goals?.away ?? null,
-    },
-    winner,
-  };
-}
-
-function attachEliminationState(teams, bracket) {
-  // A team is eliminated if their last completed knockout match was a loss.
-  for (const round of bracket.rounds) {
-    for (const match of round.matches) {
-      if (match.status !== "FT" && match.status !== "AET" && match.status !== "PEN") continue;
-      if (!match.winner) continue;
-      const losingSide = match.winner === "home" ? match.away : match.home;
-      const winningSide = match.winner === "home" ? match.home : match.away;
-      if (losingSide.code && teams[losingSide.code]) {
-        teams[losingSide.code].eliminated = true;
-        teams[losingSide.code].eliminatedAt = round.name;
-        teams[losingSide.code].eliminatedBy = winningSide.name;
-      }
-    }
-  }
-}
-
-function collectTeams(standings, fixtures) {
+function collectTeams(teamsData) {
+  const list = teamsData?.sports?.[0]?.leagues?.[0]?.teams || [];
   const teams = {};
-
-  const upsert = (raw) => {
-    if (!raw) return;
-    const code = resolveCode(raw);
-    if (!code) return;
-    if (!teams[code]) {
-      teams[code] = {
-        code,
-        apiId: raw.id,
-        name: raw.name,
-        logo: raw.logo || null,
-      };
-    }
-  };
-
-  for (const league of standings?.response ?? []) {
-    for (const group of league.league?.standings ?? []) {
-      for (const row of group) upsert(row.team);
-    }
+  for (const wrapper of list) {
+    const t = wrapper.team || {};
+    const code = (t.abbreviation || "").toUpperCase();
+    if (!code) continue;
+    teams[code] = {
+      code,
+      apiId: t.id || null,
+      name: t.displayName || code,
+      shortName: t.shortDisplayName || t.name || t.displayName || code,
+      logo: t.logos?.[0]?.href || t.logo || null,
+      color: t.color ? `#${t.color}` : null,
+    };
   }
-  for (const match of fixtures?.response ?? []) {
-    upsert(match.teams?.home);
-    upsert(match.teams?.away);
-  }
-
   return teams;
 }
 
+// ---------- standings → group table + stats ----------
+
 function attachStandings(teams, standings) {
-  for (const league of standings?.response ?? []) {
-    for (const group of league.league?.standings ?? []) {
-      for (const row of group) {
-        const code = resolveCode(row.team);
-        if (!code || !teams[code]) continue;
-        teams[code].stats = {
-          played: row.all?.played ?? 0,
-          wins: row.all?.win ?? 0,
-          draws: row.all?.draw ?? 0,
-          losses: row.all?.lose ?? 0,
-          goalsFor: row.all?.goals?.for ?? 0,
-          goalsAgainst: row.all?.goals?.against ?? 0,
-          points: row.points ?? 0,
+  const groups = standings?.children || [];
+  for (const group of groups) {
+    const groupName = group.name || group.abbreviation || "";
+    const entries = group.standings?.entries || [];
+
+    // Build the group table once (all four teams), sorted by rank.
+    const table = entries
+      .map((e) => {
+        const stats = statsMap(e.stats);
+        return {
+          code: (e.team?.abbreviation || "").toUpperCase(),
+          name: e.team?.displayName || null,
+          position: intOrNull(stats.R) ?? 0,
+          played: intOrNull(stats.GP) ?? 0,
+          wins: intOrNull(stats.W) ?? 0,
+          draws: intOrNull(stats.D) ?? 0,
+          losses: intOrNull(stats.L) ?? 0,
+          gf: intOrNull(stats.F) ?? 0,
+          ga: intOrNull(stats.A) ?? 0,
+          gd: intOrNull(stats.GD) ?? 0,
+          pts: intOrNull(stats.P) ?? 0,
+          advanced: intOrNull(stats.ADV) === 1,
         };
-        if (row.form) teams[code].form = row.form;
-        if (row.group) teams[code].group = row.group;
-        if (row.rank != null) teams[code].groupRank = row.rank;
-      }
+      })
+      .sort((a, b) => a.position - b.position);
+
+    for (const e of entries) {
+      const code = (e.team?.abbreviation || "").toUpperCase();
+      if (!code || !teams[code]) continue;
+      const stats = statsMap(e.stats);
+      teams[code].group = groupName;
+      teams[code].groupRank = intOrNull(stats.R) ?? 0;
+      teams[code].advancedFromGroup = intOrNull(stats.ADV) === 1;
+      teams[code].groupTable = table;
     }
   }
 }
 
-function attachNextFixtures(teams, fixtures) {
-  const now = Date.now();
-  const byTeam = new Map();
-
-  for (const match of fixtures?.response ?? []) {
-    const date = match.fixture?.date ? Date.parse(match.fixture.date) : NaN;
-    if (Number.isNaN(date)) continue;
-
-    const homeCode = resolveCode(match.teams?.home);
-    const awayCode = resolveCode(match.teams?.away);
-    const venue = match.fixture?.venue?.name
-      ? `${match.fixture.venue.name}${match.fixture.venue.city ? `, ${match.fixture.venue.city}` : ""}`
-      : null;
-
-    const statusShort = match.fixture?.status?.short ?? "NS";
-    const isUpcoming = date >= now && ["NS", "TBD", "PST"].includes(statusShort);
-
-    // Last completed match for "recent" lookup
-    if (homeCode && teams[homeCode] && !isUpcoming) {
-      const prior = teams[homeCode].lastMatch;
-      if (!prior || prior.dateTs < date) {
-        teams[homeCode].lastMatch = {
-          dateTs: date,
-          opponent: match.teams?.away?.name,
-          venue,
-          status: statusShort,
-          score: scoreString(match, "home"),
-        };
-      }
-    }
-    if (awayCode && teams[awayCode] && !isUpcoming) {
-      const prior = teams[awayCode].lastMatch;
-      if (!prior || prior.dateTs < date) {
-        teams[awayCode].lastMatch = {
-          dateTs: date,
-          opponent: match.teams?.home?.name,
-          venue,
-          status: statusShort,
-          score: scoreString(match, "away"),
-        };
-      }
-    }
-
-    if (!isUpcoming) continue;
-
-    const consider = (code, opponent) => {
-      if (!code || !teams[code]) return;
-      const current = byTeam.get(code);
-      if (current && current.dateTs <= date) return;
-      byTeam.set(code, {
-        dateTs: date,
-        date: match.fixture.date,
-        opponent,
-        venue,
-        status: statusShort,
-        round: match.league?.round || null,
-      });
-    };
-
-    consider(homeCode, match.teams?.away?.name);
-    consider(awayCode, match.teams?.home?.name);
+function statsMap(stats) {
+  const map = {};
+  for (const s of stats || []) {
+    if (s?.abbreviation) map[s.abbreviation] = s.displayValue ?? s.value;
   }
-
-  for (const [code, fixture] of byTeam.entries()) {
-    teams[code].nextFixture = fixture;
-  }
+  return map;
 }
 
-function attachTopScorers(teams, scorers) {
-  // API-Football returns the top scorers in the tournament. Pick the leading
-  // scorer per team if they appear in the list.
-  for (const row of scorers?.response ?? []) {
-    const code = resolveCode(row.statistics?.[0]?.team);
-    if (!code || !teams[code]) continue;
-    const goals = row.statistics?.[0]?.goals?.total ?? 0;
-    const existing = teams[code].topScorer;
-    if (existing && existing.goals >= goals) continue;
-    teams[code].topScorer = { name: row.player?.name, goals };
-  }
+function intOrNull(v) {
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(/[^\d-]/g, ""));
+  return Number.isFinite(n) ? n : null;
 }
 
-function attachTopAssisters(teams, assisters) {
-  for (const row of assisters?.response ?? []) {
-    const code = resolveCode(row.statistics?.[0]?.team);
-    if (!code || !teams[code]) continue;
-    const assists = row.statistics?.[0]?.goals?.assists ?? 0;
-    const existing = teams[code].topAssister;
-    if (existing && existing.assists >= assists) continue;
-    teams[code].topAssister = { name: row.player?.name, assists };
-  }
+// ---------- events → per-team fixtures + bracket ----------
+
+function normalizeEvent(e) {
+  const comp = e.competitions?.[0];
+  if (!comp) return null;
+  const home = comp.competitors?.find((c) => c.homeAway === "home");
+  const away = comp.competitors?.find((c) => c.homeAway === "away");
+  if (!home || !away) return null;
+  const status = comp.status?.type || {};
+  const roundKey = ROUND_SLUG_TO_KEY[e.season?.slug] || null;
+  const roundLabel = ROUND_KEY_LABEL[roundKey] || cleanRoundName(e.season?.slug);
+  const venue = comp.venue?.fullName
+    ? `${comp.venue.fullName}${comp.venue.address?.city ? `, ${comp.venue.address.city}` : ""}`
+    : null;
+  const broadcasts = comp.broadcasts?.[0]?.names || [];
+  const winner = home.winner ? "home" : away.winner ? "away" : null;
+  return {
+    eventId: e.id,
+    date: e.date,
+    dateTs: e.date ? Date.parse(e.date) : 0,
+    round: e.season?.slug || null,
+    roundKey,
+    roundLabel,
+    status: status.shortDetail || status.detail || "TBD",
+    statusState: status.state || null,
+    completed: status.completed === true,
+    winner,
+    venue,
+    broadcasts,
+    home: sideOf(home),
+    away: sideOf(away),
+  };
 }
 
-function attachTeamFixtures(teams, fixtures) {
-  for (const m of fixtures?.response ?? []) {
-    const homeCode = resolveCode(m.teams?.home);
-    const awayCode = resolveCode(m.teams?.away);
-    const round = m.league?.round || null;
-    const date = m.fixture?.date || null;
-    const status = m.fixture?.status?.short || "NS";
-    const venue = m.fixture?.venue?.name
-      ? `${m.fixture.venue.name}${m.fixture.venue.city ? `, ${m.fixture.venue.city}` : ""}`
-      : null;
-    const homeGoals = m.goals?.home;
-    const awayGoals = m.goals?.away;
-    const isCompleted = ["FT", "AET", "PEN"].includes(status);
+function cleanRoundName(slug) {
+  if (!slug) return "";
+  return slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-    const push = (code, isHome) => {
-      if (!code || !teams[code]) return;
-      if (!teams[code].fixtures) teams[code].fixtures = [];
-      const myScore = isHome ? homeGoals : awayGoals;
-      const oppScore = isHome ? awayGoals : homeGoals;
-      const oppName = isHome ? m.teams?.away?.name : m.teams?.home?.name;
-      let result = null;
-      if (isCompleted && myScore != null && oppScore != null) {
-        // PEN results need the explicit winner flag — scores can be level.
-        if (status === "PEN") {
-          const myWinner = isHome ? m.teams?.home?.winner : m.teams?.away?.winner;
-          result = myWinner ? "W" : "L";
-        } else if (myScore > oppScore) {
-          result = "W";
-        } else if (myScore < oppScore) {
-          result = "L";
-        } else {
-          result = "D";
-        }
-      }
-      teams[code].fixtures.push({
-        dateTs: date ? Date.parse(date) : 0,
-        date,
-        round,
-        opponent: oppName,
-        venue,
-        status,
-        myScore,
-        oppScore,
-        result,
-        home: isHome,
-      });
-    };
+function sideOf(competitor) {
+  const t = competitor.team || {};
+  const score = competitor.score != null && competitor.score !== ""
+    ? Number(competitor.score)
+    : null;
+  return {
+    code: (t.abbreviation || "").toUpperCase() || null,
+    name: t.displayName || null,
+    logo: t.logo || null,
+    color: t.color ? `#${t.color}` : null,
+    score,
+    winner: competitor.winner === true,
+    advanced: competitor.advance === true,
+    form: competitor.form || null,
+  };
+}
 
-    push(homeCode, true);
-    push(awayCode, false);
+function attachTeamFixtures(teams, events) {
+  for (const m of events) {
+    push(teams, m.home.code, m, "home", m.away);
+    push(teams, m.away.code, m, "away", m.home);
   }
-
   for (const team of Object.values(teams)) {
-    if (!team.fixtures) continue;
-    team.fixtures.sort((a, b) => a.dateTs - b.dateTs);
+    (team.fixtures || []).sort((a, b) => a.dateTs - b.dateTs);
   }
+}
+
+function push(teams, code, match, side, opp) {
+  if (!code || !teams[code]) return;
+  if (!teams[code].fixtures) teams[code].fixtures = [];
+  const mine = match[side];
+  let result = null;
+  if (match.completed && mine.score != null && opp.score != null) {
+    if (match.winner) {
+      result = match.winner === side ? "W" : "L";
+    } else if (mine.score > opp.score) result = "W";
+    else if (mine.score < opp.score) result = "L";
+    else result = "D";
+  }
+  teams[code].fixtures.push({
+    eventId: match.eventId,
+    date: match.date,
+    dateTs: match.dateTs,
+    round: match.roundLabel || match.round,
+    roundKey: match.roundKey,
+    opponent: opp.name,
+    opponentCode: opp.code,
+    venue: match.venue,
+    status: match.status,
+    myScore: mine.score,
+    oppScore: opp.score,
+    result,
+    home: side === "home",
+    broadcasts: match.broadcasts,
+  });
 }
 
 function attachAggregateStats(teams) {
@@ -487,155 +315,124 @@ function attachAggregateStats(teams) {
   }
 }
 
-function attachGroupStandings(teams, fixtures) {
-  // Group-stage matches are tagged like "Group Stage - 1/2/3" in the round
-  // field. No explicit group letter, but two teams are in the same group iff
-  // they meet during group stage.
-  const groupMatches = (fixtures?.response ?? []).filter((m) => /group stage/i.test(m.league?.round || ""));
-
-  const teamMates = new Map(); // teamName -> Set of opponents seen in group stage
-  for (const m of groupMatches) {
-    const home = m.teams?.home?.name;
-    const away = m.teams?.away?.name;
-    if (!home || !away) continue;
-    if (!teamMates.has(home)) teamMates.set(home, new Set());
-    if (!teamMates.has(away)) teamMates.set(away, new Set());
-    teamMates.get(home).add(away);
-    teamMates.get(away).add(home);
+function buildBracket(events) {
+  const grouped = {};
+  for (const m of events) {
+    if (!m.roundKey) continue;
+    if (!grouped[m.roundKey]) grouped[m.roundKey] = [];
+    grouped[m.roundKey].push(m);
   }
 
-  const groupOf = (name) => {
-    const mates = teamMates.get(name);
-    if (!mates) return null;
-    return [name, ...mates];
-  };
+  const rounds = [];
+  for (const key of ROUND_KEY_ORDER) {
+    const matches = grouped[key];
+    if (!matches?.length) continue;
+    matches.sort((a, b) => a.dateTs - b.dateTs || String(a.eventId).localeCompare(String(b.eventId)));
+    rounds.push({
+      key,
+      name: ROUND_KEY_LABEL[key],
+      matches: matches.map((m) => ({
+        eventId: m.eventId,
+        fixtureId: m.eventId,
+        date: m.date,
+        venue: m.venue,
+        status: m.status,
+        home: { code: m.home.code, name: m.home.name, logo: m.home.logo, score: m.home.score },
+        away: { code: m.away.code, name: m.away.name, logo: m.away.logo, score: m.away.score },
+        winner: m.winner,
+        broadcasts: m.broadcasts,
+      })),
+    });
+  }
+  return { rounds };
+}
 
-  for (const team of Object.values(teams)) {
-    if (!team.name) continue;
-    const members = groupOf(team.name);
-    if (!members || members.length < 2) continue;
-
-    const stats = {};
-    for (const n of members) stats[n] = { name: n, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0, pts: 0 };
-
-    for (const m of groupMatches) {
-      const h = m.teams?.home?.name;
-      const a = m.teams?.away?.name;
-      if (!stats[h] || !stats[a]) continue;
-      const status = m.fixture?.status?.short;
-      if (!["FT", "AET", "PEN"].includes(status)) continue;
-      const hg = m.goals?.home ?? 0;
-      const ag = m.goals?.away ?? 0;
-
-      stats[h].played += 1; stats[a].played += 1;
-      stats[h].gf += hg;   stats[h].ga += ag;
-      stats[a].gf += ag;   stats[a].ga += hg;
-
-      if (hg > ag) {
-        stats[h].wins += 1; stats[h].pts += 3;
-        stats[a].losses += 1;
-      } else if (hg < ag) {
-        stats[a].wins += 1; stats[a].pts += 3;
-        stats[h].losses += 1;
-      } else {
-        stats[h].draws += 1; stats[h].pts += 1;
-        stats[a].draws += 1; stats[a].pts += 1;
+function attachEliminationState(teams, bracket) {
+  for (const round of bracket.rounds) {
+    for (const match of round.matches) {
+      if (match.winner === null || match.winner === undefined) continue;
+      const losing = match.winner === "home" ? match.away : match.home;
+      const winning = match.winner === "home" ? match.home : match.away;
+      if (losing.code && teams[losing.code]) {
+        teams[losing.code].eliminated = true;
+        teams[losing.code].eliminatedAt = round.name;
+        teams[losing.code].eliminatedBy = winning.name;
       }
     }
-
-    const table = Object.values(stats)
-      .map((s) => ({ ...s, gd: s.gf - s.ga }))
-      .sort((x, y) => y.pts - x.pts || y.gd - x.gd || y.gf - x.gf || x.name.localeCompare(y.name))
-      .map((row, idx) => ({ ...row, position: idx + 1 }));
-
-    team.groupTable = table;
   }
 }
 
 function attachTeamStage(teams, bracket) {
-  // Mark each team's current stage so the panel can show "Round of 16" /
-  // "Eliminated · Round of 32" without recomputing from fixtures client-side.
-  const stageOrder = ["R32", "R16", "QF", "SF", "F"];
-  const stageLabel = { R32: "Round of 32", R16: "Round of 16", QF: "Quarter-final", SF: "Semi-final", F: "Final" };
   for (const round of bracket.rounds) {
-    if (!stageOrder.includes(round.key)) continue;
+    const rank = ROUND_KEY_ORDER.indexOf(round.key);
+    if (rank < 0) continue;
     for (const match of round.matches) {
       for (const side of ["home", "away"]) {
         const code = match[side].code;
         if (!code || !teams[code]) continue;
-        const team = teams[code];
-        // Only overwrite with a later stage; never downgrade.
-        const currentRank = team.stageRank ?? -1;
-        const newRank = stageOrder.indexOf(round.key);
-        if (newRank > currentRank) {
-          team.stage = stageLabel[round.key];
-          team.stageKey = round.key;
-          team.stageRank = newRank;
-        }
+        if ((teams[code].stageRank ?? -1) >= rank) continue;
+        teams[code].stage = ROUND_KEY_LABEL[round.key];
+        teams[code].stageKey = round.key;
+        teams[code].stageRank = rank;
       }
     }
   }
 }
 
-function resolveCode(team) {
-  if (!team) return null;
-  // Prefer FIFA 3-letter code when API-Football emits one of ours.
-  if (team.code && KNOWN_CODES.has(team.code.toUpperCase())) {
-    return team.code.toUpperCase();
+function attachNextFixture(teams, events) {
+  const now = Date.now();
+  const byTeam = new Map();
+  for (const m of events) {
+    if (m.completed) continue;
+    if (!m.dateTs || m.dateTs < now - 60 * 60 * 1000) continue; // ignore anything more than an hour past
+    consider(byTeam, m.home.code, m, "home", m.away);
+    consider(byTeam, m.away.code, m, "away", m.home);
   }
-  // Otherwise look up by normalized name. Strip diacritics + lowercase.
-  const name = (team.name || "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .trim();
-  if (NAME_TO_CODE[name]) return NAME_TO_CODE[name];
-  // Fall back: try collapsing punctuation / "the".
-  const simplified = name.replace(/[^a-z]+/g, " ").replace(/\bthe\b/g, "").trim();
-  if (NAME_TO_CODE[simplified]) return NAME_TO_CODE[simplified];
-  return null;
+  for (const [code, entry] of byTeam.entries()) {
+    if (!teams[code]) continue;
+    teams[code].nextFixture = entry;
+  }
 }
 
-function scoreString(match, side) {
-  const home = match.goals?.home;
-  const away = match.goals?.away;
-  if (home == null || away == null) return null;
-  return side === "home" ? `${home}-${away}` : `${away}-${home}`;
+function consider(byTeam, code, match, side, opp) {
+  if (!code) return;
+  const current = byTeam.get(code);
+  if (current && current.dateTs <= match.dateTs) return;
+  byTeam.set(code, {
+    dateTs: match.dateTs,
+    date: match.date,
+    opponent: opp.name,
+    opponentCode: opp.code,
+    venue: match.venue,
+    status: match.status,
+    round: match.roundLabel || match.round,
+    broadcasts: match.broadcasts || [],
+  });
 }
 
-async function apiFootball(apiKey, path, params) {
-  const url = new URL(API_BASE + path);
-  for (const [key, value] of Object.entries(params)) {
-    if (value != null) url.searchParams.set(key, String(value));
-  }
+// ---------- top scorers (from ESPN 'leaders' if present) ----------
 
+function attachTopScorers(teams, events) {
+  // ESPN's scoreboard doesn't expose per-team tournament scorer leaders in a
+  // stable, easy-to-consume shape on the free endpoint. Skip for now; the
+  // panel already tolerates a missing topScorer.
+  //
+  // (Intentionally left blank so we don't invent numbers.)
+  void teams; void events;
+}
+
+// ---------- fetch helper ----------
+
+async function espnFetch(url) {
   const response = await fetch(url, {
-    headers: {
-      "x-apisports-key": apiKey,
-      "Accept": "application/json",
-    },
-    // Cache upstream calls at Cloudflare's edge for a short window so two
-    // near-simultaneous snapshot rebuilds don't double-bill our quota.
+    headers: { Accept: "application/json" },
     cf: { cacheTtl: 60, cacheEverything: true },
   });
-
-  if (!response.ok) {
-    throw new Error(`API-Football ${path} ${response.status}`);
-  }
-  const body = await response.json();
-
-  // API-Football returns HTTP 200 even on rate-limit / plan errors. Surface
-  // those so buildSnapshot fails loudly instead of returning empty data.
-  const errors = body?.errors;
-  const hasErrors = errors && (Array.isArray(errors) ? errors.length > 0 : Object.keys(errors).length > 0);
-  if (hasErrors) {
-    const msg = JSON.stringify(errors);
-    throw new Error(`API-Football ${path} responded with errors: ${msg}`);
-  }
-
-  console.log(`api ${path} → results=${body?.results ?? "?"}`);
-  return body;
+  if (!response.ok) throw new Error(`ESPN ${url} ${response.status}`);
+  return response.json();
 }
+
+// ---------- response helpers ----------
 
 function corsHeaders() {
   return {
@@ -647,10 +444,7 @@ function corsHeaders() {
 
 function withClientHeaders(response) {
   const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(corsHeaders())) {
-    headers.set(key, value);
-  }
-  // Force-replace the edge-friendly Cache-Control with a browser-safe one.
+  for (const [k, v] of Object.entries(corsHeaders())) headers.set(k, v);
   headers.set("Cache-Control", "no-store");
   return new Response(response.body, {
     status: response.status,

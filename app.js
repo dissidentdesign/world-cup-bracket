@@ -45,27 +45,28 @@ const geometry = {
   roundRadii: [330, 250, 178, 118],
 };
 
-// Official WC2026 R32 bracket positions, clockwise from the top.
-// Each entry is the matchup at that slot; the first team sits at the lower
-// slot index (earlier clockwise position). Matched to API team names so the
-// lookup against snapshot.bracket works without aliasing.
+// Official WC2026 R32 bracket positions, clockwise from the top. Each entry
+// is the matchup at that slot; the first team sits at the lower slot index
+// (earlier clockwise position). Matched by FIFA 3-letter code so the lookup
+// is stable regardless of upstream naming (ESPN uses "Bosnia-Herzegovina",
+// "United States", etc. — codes let us ignore those differences).
 const BRACKET_POSITION = [
-  ["France", "Sweden"],
-  ["Germany", "Paraguay"],
-  ["Brazil", "Japan"],
-  ["Ivory Coast", "Norway"],
-  ["Mexico", "Ecuador"],
-  ["England", "Congo DR"],
-  ["Argentina", "Cape Verde Islands"],
-  ["Australia", "Egypt"],
-  ["Switzerland", "Algeria"],
-  ["Colombia", "Ghana"],
-  ["Belgium", "Senegal"],
-  ["USA", "Bosnia & Herzegovina"],
-  ["Austria", "Spain"],
-  ["Croatia", "Portugal"],
-  ["Morocco", "Netherlands"],
-  ["South Africa", "Canada"],
+  ["FRA", "SWE"],
+  ["GER", "PAR"],
+  ["BRA", "JPN"],
+  ["CIV", "NOR"],
+  ["MEX", "ECU"],
+  ["ENG", "COD"],
+  ["ARG", "CPV"],
+  ["AUS", "EGY"],
+  ["SUI", "ALG"],
+  ["COL", "GHA"],
+  ["BEL", "SEN"],
+  ["USA", "BIH"],
+  ["AUT", "ESP"],
+  ["CRO", "POR"],
+  ["MAR", "NED"],
+  ["RSA", "CAN"],
 ];
 
 const seededByCode = new Map(teams.map((item) => [item.code, item]));
@@ -271,7 +272,10 @@ function flagMarkup(item) {
   if (slug) {
     return `<span class="flag flag-img" aria-hidden="true" style="background-image:url('https://flagcdn.com/w160/${slug}.png')"></span>`;
   }
-  return `<span class="flag" aria-hidden="true">${item.flag}</span>`;
+  if (item.apiLogo) {
+    return `<span class="flag flag-img" aria-hidden="true" style="background-image:url('${item.apiLogo}')"></span>`;
+  }
+  return `<span class="flag" aria-hidden="true">${item.flag || "🏳️"}</span>`;
 }
 
 // Convert a flag emoji into the slug flagcdn.com expects (lowercase 2-letter
@@ -461,21 +465,36 @@ function renderTournamentPath(live, item) {
 function pathRow(f) {
   const result = f.result;
   const resultClass = result === "W" ? "is-win" : result === "L" ? "is-loss" : result === "D" ? "is-draw" : "is-upcoming";
-  const resultLabel = result ?? (f.status === "NS" ? "—" : f.status);
+  const resultLabel = result ?? shortStatus(f.status);
   const scoreText = f.myScore != null && f.oppScore != null
     ? `${f.myScore}–${f.oppScore}`
     : "vs";
   const roundShort = shortRound(f.round);
   const dateText = f.date ? formatFixtureDate(f.date) : "";
   const venueText = f.venue || "";
+  const metaParts = [dateText, venueText].filter(Boolean);
+  const upcoming = !result;
+  const broadcasts = Array.isArray(f.broadcasts) ? f.broadcasts.filter(Boolean) : [];
+  const watchLine = upcoming && broadcasts.length
+    ? `<span class="path-watch">📺 ${broadcasts.join(" · ")}</span>`
+    : "";
   return `
     <li class="path-row">
       <span class="path-chip ${resultClass}" aria-label="Result ${resultLabel}">${resultLabel}</span>
       <span class="path-round">${roundShort}</span>
       <span class="path-score"><strong>${scoreText}</strong> ${f.opponent}</span>
-      <span class="path-meta">${[dateText, venueText].filter(Boolean).join(" · ")}</span>
+      <span class="path-meta">${metaParts.join(" · ")}</span>
+      ${watchLine}
     </li>
   `;
+}
+
+function shortStatus(s) {
+  if (!s) return "—";
+  if (/scheduled/i.test(s)) return "—";
+  if (/full time|FT/i.test(s)) return "FT";
+  if (/half/i.test(s)) return "HT";
+  return s.length > 8 ? s.slice(0, 8) : s;
 }
 
 function renderGroupRecap(item) {
@@ -605,16 +624,16 @@ function applyBracketLayout(bracket) {
   const totalSlots = BRACKET_POSITION.length * 2;
   const missing = [];
 
-  BRACKET_POSITION.forEach(([leftName, rightName], position) => {
+  BRACKET_POSITION.forEach(([leftCode, rightCode], position) => {
     const match = r32.matches.find((m) => {
-      const a = m.home?.name, b = m.away?.name;
-      return (a === leftName && b === rightName) || (a === rightName && b === leftName);
+      const a = m.home?.code, b = m.away?.code;
+      return (a === leftCode && b === rightCode) || (a === rightCode && b === leftCode);
     });
     if (!match) {
-      missing.push(`${leftName} vs ${rightName}`);
+      missing.push(`${leftCode} vs ${rightCode}`);
       return;
     }
-    const leftSide = match.home?.name === leftName ? "home" : "away";
+    const leftSide = match.home?.code === leftCode ? "home" : "away";
     const rightSide = leftSide === "home" ? "away" : "home";
     newLayout.push(buildLeaf(match, leftSide, position * 2, totalSlots));
     newLayout.push(buildLeaf(match, rightSide, position * 2 + 1, totalSlots));

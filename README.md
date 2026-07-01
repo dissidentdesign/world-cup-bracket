@@ -20,7 +20,7 @@ Open `http://127.0.0.1:4173/`.
 
 ## Live data
 
-The bracket layout is driven by the seeded `teams` array in `app.js`. When a Cloudflare Worker URL is set on `<body data-api-base="…">`, the app calls `GET /api/snapshot` on that worker and merges live fixtures, standings, form, and top scorers into the team detail panel.
+The bracket layout is driven by the seeded `teams` array in `app.js`. When a Cloudflare Worker URL is set on `<body data-api-base="…">`, the app calls `GET /api/snapshot` on that worker, which fetches ESPN's public soccer endpoints and returns a normalized blob keyed by FIFA 3-letter code. No API key or subscription needed.
 
 To enable it:
 
@@ -28,7 +28,6 @@ To enable it:
 cd worker
 npm install
 npx wrangler login
-npx wrangler secret put API_FOOTBALL_KEY   # paste your api-sports.io key
 npm run deploy
 ```
 
@@ -38,13 +37,15 @@ Take the printed URL and put it on the body tag:
 <body data-api-base="https://world-cup-bracket-api.<your-subdomain>.workers.dev">
 ```
 
-Reload — you'll see a "Live" pill in the header. The worker hides the API key, caches the snapshot at the edge for 5 minutes, and returns a single JSON blob keyed by FIFA 3-letter code, so the app makes one network call per page load regardless of how many users hit it. See `worker/README.md` for details.
+Reload — you'll see a "Live" pill in the header. The worker caches the snapshot at the edge for 15 minutes and keeps a 24h stale copy that's served if ESPN ever errors, so the app makes one network call per page load regardless of how many users hit it. See `worker/README.md` for details.
 
-### What the free tier covers
-- Fixtures, standings (W-D-L, goals, points, form), and top scorers.
-- API-Football's free tier is 100 requests/day; the 5-minute edge cache keeps us well inside that.
+### What ships live from ESPN
+- Full 48-team roster with logos, colors, group assignment.
+- Every match (group stage through final): score, status, venue, kickoff time.
+- Group standings (P/W/D/L/GF/GA/GD/Pts) with the advancement flag per team.
+- Real broadcaster list per upcoming match (FOX, Telemundo, FOX One, etc.).
+- Bracket structure — R32 → R16 → QF → SF → Final with winners auto-computed from results.
 
-### What still needs a paid feed
-- Per-match possession / xG (API-Football has it under fixture statistics; the free tier rate budget makes 32-team aggregation impractical).
-- FIFA world rankings (no public API — currently kept seeded).
-- Broadcast listings (licensed; the seeded FOX/Telemundo/Peacock values cover the US rightsholders through 2026).
+### What stays seeded
+- FIFA world rankings (no public source).
+- Team color accents (used behind flags in a few places; ESPN gives us `color` too but the seed values are hand-tuned).
