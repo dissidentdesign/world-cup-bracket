@@ -9,8 +9,9 @@
 const API_BASE = "https://v3.football.api-sports.io";
 const LEAGUE_ID = 1; // FIFA World Cup
 const DEFAULT_SEASON = 2026;
-const SNAPSHOT_CACHE_TTL_SECONDS = 300; // 5 minutes
-const CACHE_VERSION = "v4"; // Bump whenever the snapshot shape changes.
+const SNAPSHOT_CACHE_TTL_SECONDS = 900; // 15 minutes
+const STALE_CACHE_TTL_SECONDS = 86400; // Serve stale snapshots for 24h if upstream errors.
+const CACHE_VERSION = "v5"; // Bump whenever the snapshot shape changes.
 
 const KNOCKOUT_ROUNDS = [
   { key: "R32", patterns: [/round of 32/i] },
@@ -103,6 +104,7 @@ async function handleSnapshot(request, env, ctx, url) {
   const refresh = url.searchParams.get("refresh") === "1";
   const cache = caches.default;
   const cacheKey = new Request(`https://snapshot.cache/${CACHE_VERSION}/season=${season}`, { method: "GET" });
+  const staleKey = new Request(`https://snapshot.cache/${CACHE_VERSION}/season=${season}/stale`, { method: "GET" });
 
   if (!refresh) {
     const cached = await cache.match(cacheKey);
@@ -120,21 +122,39 @@ async function handleSnapshot(request, env, ctx, url) {
   try {
     snapshot = await buildSnapshot(env.API_FOOTBALL_KEY, season);
   } catch (err) {
+    // Upstream failed (usually rate-limit). Fall back to the 24h stale
+    // cache if we have one, so the page keeps working instead of going
+    // dark until the quota resets.
+    const stale = await cache.match(staleKey);
+    if (stale) {
+      const body = await stale.text();
+      return jsonResponse(JSON.parse(body), 200, {
+        "Cache-Control": "no-store",
+        "X-Stale-Reason": String(err).slice(0, 160),
+      });
+    }
     return jsonResponse({ error: "Upstream fetch failed", detail: String(err) }, 502);
   }
 
-  // The response we stash in the edge cache uses a long Cache-Control so
-  // the Cache API honors our TTL. The response we return to the browser
-  // uses no-store so clients never disk-cache a stale snapshot.
-  const cacheBody = JSON.stringify(snapshot);
-  const cacheable = new Response(cacheBody, {
+  const body = JSON.stringify(snapshot);
+
+  // Fresh copy for the edge (5-min TTL).
+  ctx.waitUntil(cache.put(cacheKey, new Response(body, {
     status: 200,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": `public, max-age=${SNAPSHOT_CACHE_TTL_SECONDS}`,
     },
-  });
-  ctx.waitUntil(cache.put(cacheKey, cacheable));
+  })));
+
+  // Long-lived stale copy, only served when upstream errors.
+  ctx.waitUntil(cache.put(staleKey, new Response(body, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": `public, max-age=${STALE_CACHE_TTL_SECONDS}`,
+    },
+  })));
 
   return jsonResponse(snapshot, 200, {
     "Cache-Control": "no-store",
@@ -156,6 +176,7 @@ async function buildSnapshot(apiKey, season) {
   attachTopAssisters(teams, assisters);
   attachTeamFixtures(teams, fixtures);
   attachAggregateStats(teams);
+  attachGroupStandings(teams, fixtures);
   const bracket = buildBracket(fixtures);
   attachEliminationState(teams, bracket);
   attachTeamStage(teams, bracket);
@@ -466,6 +487,71 @@ function attachAggregateStats(teams) {
   }
 }
 
+function attachGroupStandings(teams, fixtures) {
+  // Group-stage matches are tagged like "Group Stage - 1/2/3" in the round
+  // field. No explicit group letter, but two teams are in the same group iff
+  // they meet during group stage.
+  const groupMatches = (fixtures?.response ?? []).filter((m) => /group stage/i.test(m.league?.round || ""));
+
+  const teamMates = new Map(); // teamName -> Set of opponents seen in group stage
+  for (const m of groupMatches) {
+    const home = m.teams?.home?.name;
+    const away = m.teams?.away?.name;
+    if (!home || !away) continue;
+    if (!teamMates.has(home)) teamMates.set(home, new Set());
+    if (!teamMates.has(away)) teamMates.set(away, new Set());
+    teamMates.get(home).add(away);
+    teamMates.get(away).add(home);
+  }
+
+  const groupOf = (name) => {
+    const mates = teamMates.get(name);
+    if (!mates) return null;
+    return [name, ...mates];
+  };
+
+  for (const team of Object.values(teams)) {
+    if (!team.name) continue;
+    const members = groupOf(team.name);
+    if (!members || members.length < 2) continue;
+
+    const stats = {};
+    for (const n of members) stats[n] = { name: n, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0, pts: 0 };
+
+    for (const m of groupMatches) {
+      const h = m.teams?.home?.name;
+      const a = m.teams?.away?.name;
+      if (!stats[h] || !stats[a]) continue;
+      const status = m.fixture?.status?.short;
+      if (!["FT", "AET", "PEN"].includes(status)) continue;
+      const hg = m.goals?.home ?? 0;
+      const ag = m.goals?.away ?? 0;
+
+      stats[h].played += 1; stats[a].played += 1;
+      stats[h].gf += hg;   stats[h].ga += ag;
+      stats[a].gf += ag;   stats[a].ga += hg;
+
+      if (hg > ag) {
+        stats[h].wins += 1; stats[h].pts += 3;
+        stats[a].losses += 1;
+      } else if (hg < ag) {
+        stats[a].wins += 1; stats[a].pts += 3;
+        stats[h].losses += 1;
+      } else {
+        stats[h].draws += 1; stats[h].pts += 1;
+        stats[a].draws += 1; stats[a].pts += 1;
+      }
+    }
+
+    const table = Object.values(stats)
+      .map((s) => ({ ...s, gd: s.gf - s.ga }))
+      .sort((x, y) => y.pts - x.pts || y.gd - x.gd || y.gf - x.gf || x.name.localeCompare(y.name))
+      .map((row, idx) => ({ ...row, position: idx + 1 }));
+
+    team.groupTable = table;
+  }
+}
+
 function attachTeamStage(teams, bracket) {
   // Mark each team's current stage so the panel can show "Round of 16" /
   // "Eliminated · Round of 32" without recomputing from fixtures client-side.
@@ -536,7 +622,19 @@ async function apiFootball(apiKey, path, params) {
   if (!response.ok) {
     throw new Error(`API-Football ${path} ${response.status}`);
   }
-  return response.json();
+  const body = await response.json();
+
+  // API-Football returns HTTP 200 even on rate-limit / plan errors. Surface
+  // those so buildSnapshot fails loudly instead of returning empty data.
+  const errors = body?.errors;
+  const hasErrors = errors && (Array.isArray(errors) ? errors.length > 0 : Object.keys(errors).length > 0);
+  if (hasErrors) {
+    const msg = JSON.stringify(errors);
+    throw new Error(`API-Football ${path} responded with errors: ${msg}`);
+  }
+
+  console.log(`api ${path} → results=${body?.results ?? "?"}`);
+  return body;
 }
 
 function corsHeaders() {

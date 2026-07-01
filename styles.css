@@ -584,24 +584,61 @@ h1 {
   font-weight: 800;
 }
 
-.watch-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.group-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text);
+  font-size: 0.86rem;
 }
 
-.watch-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(247, 241, 223, 0.1);
+.group-table th {
+  padding: 6px 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(247, 241, 223, 0.14);
 }
 
-.watch-list li:last-child {
+.group-table th:nth-child(2) {
+  text-align: left;
+}
+
+.group-table td {
+  padding: 8px 4px;
+  text-align: center;
+  border-bottom: 1px solid rgba(247, 241, 223, 0.06);
+}
+
+.group-table tr:last-child td {
   border-bottom: 0;
+}
+
+.group-table td.pos {
+  color: var(--muted);
+  font-weight: 800;
+  width: 22px;
+}
+
+.group-table td.team {
+  padding-left: 6px;
+  text-align: left;
+  font-weight: 700;
+}
+
+.group-table td.pts {
+  color: var(--gold);
+  font-weight: 800;
+}
+
+.group-table tr.is-self {
+  background: rgba(227, 177, 81, 0.08);
+}
+
+.group-table tr.is-self td.team {
+  color: var(--gold);
 }
 
 .source-note {

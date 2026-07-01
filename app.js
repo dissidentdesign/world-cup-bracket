@@ -140,11 +140,6 @@ function team(id, name, code, flag, color, seed, confederation, player, opponent
     opponent,
     date: "Next fixture TBD",
     venue: "Tournament venue TBD",
-    watch: [
-      ["TV", "FOX / FS1"],
-      ["Spanish", "Telemundo / Universo"],
-      ["Streaming", "Fox Sports app, Peacock"],
-    ],
     live: null,
   };
 }
@@ -421,12 +416,7 @@ function renderTeamPanel(item) {
 
       ${path}
 
-      <section>
-        <h3 class="section-title">Where To Watch</h3>
-        <ul class="watch-list">
-          ${item.watch.map(([label, value]) => `<li><strong>${label}</strong><span>${value}</span></li>`).join("")}
-        </ul>
-      </section>
+      ${renderGroupRecap(item)}
 
       <p class="source-note">${sourceNote}</p>
     </article>
@@ -485,6 +475,34 @@ function pathRow(f) {
       <span class="path-score"><strong>${scoreText}</strong> ${f.opponent}</span>
       <span class="path-meta">${[dateText, venueText].filter(Boolean).join(" · ")}</span>
     </li>
+  `;
+}
+
+function renderGroupRecap(item) {
+  const table = item.live?.groupTable;
+  if (!table || table.length === 0) return "";
+  const rows = table.map((row) => `
+    <tr class="${row.name === item.name ? "is-self" : ""}">
+      <td class="pos">${row.position}</td>
+      <td class="team">${row.name}</td>
+      <td>${row.played}</td>
+      <td>${row.wins}</td>
+      <td>${row.draws}</td>
+      <td>${row.losses}</td>
+      <td>${row.gd >= 0 ? "+" : ""}${row.gd}</td>
+      <td class="pts">${row.pts}</td>
+    </tr>
+  `).join("");
+  return `
+    <section>
+      <h3 class="section-title">Group Recap</h3>
+      <table class="group-table">
+        <thead>
+          <tr><th></th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
   `;
 }
 
@@ -561,6 +579,7 @@ function mergeSnapshot(snapshot) {
       stats: live.stats,
       aggregateStats: live.aggregateStats,
       fixtures: live.fixtures,
+      groupTable: live.groupTable,
       stage: live.stage,
       stageKey: live.stageKey,
       form: live.form,
@@ -667,11 +686,6 @@ function placeholderTeam(side) {
     opponent: "TBD",
     date: "TBD",
     venue: "TBD",
-    watch: [
-      ["TV", "FOX / FS1"],
-      ["Spanish", "Telemundo / Universo"],
-      ["Streaming", "Fox Sports app, Peacock"],
-    ],
     live: null,
   };
 }
