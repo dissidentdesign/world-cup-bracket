@@ -186,66 +186,9 @@ h1 {
 
 .bracket-lines,
 .team-layer,
-.round-labels,
-.final-stage {
+.round-labels {
   position: absolute;
   inset: 0;
-}
-
-.final-stage {
-  z-index: 2;
-  display: grid;
-  grid-template-rows: 1fr auto 1fr;
-  place-items: center;
-  padding: 22% 0;
-  pointer-events: none;
-}
-
-.trophy,
-.trophy-fallback {
-  z-index: 3;
-  width: 22%;
-  max-width: 220px;
-  min-width: 96px;
-  height: auto;
-  object-fit: contain;
-  filter: drop-shadow(0 12px 22px rgba(0, 0, 0, 0.55));
-  pointer-events: none;
-}
-
-.trophy-fallback {
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  font-size: clamp(3rem, 8vw, 6rem);
-  line-height: 1;
-}
-
-.finalist {
-  display: grid;
-  place-items: center;
-  min-height: 46px;
-  pointer-events: none;
-}
-
-/* .finalist-node reuses the .team-node styling; only override transform
-   (no need for the -50%/-50% translation used by absolutely-positioned
-   leaves on the wheel — grid centers it for us) and give the champion
-   a gold ring. */
-.finalist-node {
-  position: static;
-  transform: none;
-  pointer-events: auto;
-}
-
-.finalist-node:hover,
-.finalist-node:focus-visible {
-  transform: scale(1.08);
-}
-
-.finalist-node.is-champion {
-  border-color: var(--gold);
-  box-shadow: 0 0 0 4px rgba(227, 177, 81, 0.32), 0 11px 14px var(--shadow);
 }
 
 .bracket-lines {

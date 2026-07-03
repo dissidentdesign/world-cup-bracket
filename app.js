@@ -219,52 +219,6 @@ function renderBracket() {
   renderConnectors();
   renderTeamNodes();
   renderAdvancement();
-  renderFinalStage();
-}
-
-function renderFinalStage() {
-  const topSlot = document.querySelector("#finalist-top");
-  const bottomSlot = document.querySelector("#finalist-bottom");
-  if (!topSlot || !bottomSlot) return;
-
-  const finalMatch = latestBracket?.rounds?.find((r) => r.key === "F")?.matches?.[0];
-  if (!finalMatch) {
-    topSlot.innerHTML = "";
-    bottomSlot.innerHTML = "";
-    return;
-  }
-
-  const homeWinner = finalMatch.winner === "home";
-  const awayWinner = finalMatch.winner === "away";
-  topSlot.innerHTML = renderFinalistBadge(finalMatch.home, homeWinner);
-  bottomSlot.innerHTML = renderFinalistBadge(finalMatch.away, awayWinner);
-  bindFinalistClicks(topSlot);
-  bindFinalistClicks(bottomSlot);
-}
-
-function bindFinalistClicks(slot) {
-  const btn = slot.querySelector("[data-team]");
-  if (!btn) return;
-  const id = btn.dataset.team;
-  if (!id || !teamById.has(id)) return;
-  btn.addEventListener("click", () => selectTeam(id));
-}
-
-function renderFinalistBadge(side, isChampion) {
-  if (!side?.code && !side?.name) return "";
-  const seeded = side.code ? seededByCode.get(side.code) : null;
-  const flagItem = seeded ?? { flag: NAME_TO_FLAG[side.name] || "🏳️", apiLogo: side.logo };
-  const label = side.name || side.code || "TBD";
-  const color = seeded?.color ?? "#29332b";
-  return `
-    <button type="button"
-            class="team-node finalist-node${isChampion ? " is-champion" : ""}"
-            style="--team-color: ${color}"
-            data-team="${seeded?.id ?? side.code ?? ""}"
-            aria-label="${label}${isChampion ? " · Champion" : " · Finalist"}">
-      ${flagMarkup(flagItem)}
-    </button>
-  `;
 }
 
 function renderAdvancement() {
@@ -634,7 +588,6 @@ function formatRelative(iso) {
 }
 
 let livePollHandle = null;
-let latestBracket = null;
 
 async function loadLiveData() {
   const apiBase = document.body.dataset.apiBase?.trim();
@@ -648,7 +601,6 @@ async function loadLiveData() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const snapshot = await response.json();
-    latestBracket = snapshot.bracket || null;
     applyBracketLayout(snapshot.bracket);
     mergeSnapshot(snapshot);
     renderBracket();
