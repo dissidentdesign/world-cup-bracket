@@ -238,22 +238,32 @@ function renderFinalStage() {
   const awayWinner = finalMatch.winner === "away";
   topSlot.innerHTML = renderFinalistBadge(finalMatch.home, homeWinner);
   bottomSlot.innerHTML = renderFinalistBadge(finalMatch.away, awayWinner);
+  bindFinalistClicks(topSlot);
+  bindFinalistClicks(bottomSlot);
+}
+
+function bindFinalistClicks(slot) {
+  const btn = slot.querySelector("[data-team]");
+  if (!btn) return;
+  const id = btn.dataset.team;
+  if (!id || !teamById.has(id)) return;
+  btn.addEventListener("click", () => selectTeam(id));
 }
 
 function renderFinalistBadge(side, isChampion) {
-  if (!side?.code && !side?.name) {
-    return `<div class="finalist-empty" aria-hidden="true">TBD</div>`;
-  }
+  if (!side?.code && !side?.name) return "";
   const seeded = side.code ? seededByCode.get(side.code) : null;
   const flagItem = seeded ?? { flag: NAME_TO_FLAG[side.name] || "🏳️", apiLogo: side.logo };
   const label = side.name || side.code || "TBD";
+  const color = seeded?.color ?? "#29332b";
   return `
-    <div class="finalist-badge${isChampion ? " is-champion" : ""}"
-         style="--team-color: ${seeded?.color ?? "#3a3a3a"}"
-         title="${label}${isChampion ? " · Champion" : ""}">
+    <button type="button"
+            class="team-node finalist-node${isChampion ? " is-champion" : ""}"
+            style="--team-color: ${color}"
+            data-team="${seeded?.id ?? side.code ?? ""}"
+            aria-label="${label}${isChampion ? " · Champion" : " · Finalist"}">
       ${flagMarkup(flagItem)}
-      <span class="finalist-label">${label}</span>
-    </div>
+    </button>
   `;
 }
 

@@ -224,56 +224,28 @@ h1 {
 .finalist {
   display: grid;
   place-items: center;
-  min-height: 40px;
+  min-height: 46px;
+  pointer-events: none;
 }
 
-.finalist-badge {
-  display: grid;
-  grid-template-columns: 46px auto;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 14px 4px 4px;
-  border: 2px solid rgba(247, 241, 223, 0.72);
-  border-radius: 999px;
-  background: rgba(23, 25, 21, 0.85);
-  filter: drop-shadow(0 8px 14px var(--shadow));
+/* .finalist-node reuses the .team-node styling; only override transform
+   (no need for the -50%/-50% translation used by absolutely-positioned
+   leaves on the wheel — grid centers it for us) and give the champion
+   a gold ring. */
+.finalist-node {
+  position: static;
+  transform: none;
   pointer-events: auto;
 }
 
-.finalist-badge .flag {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--team-color, #29332b);
+.finalist-node:hover,
+.finalist-node:focus-visible {
+  transform: scale(1.08);
 }
 
-.finalist-label {
-  color: var(--text);
-  font-size: 0.85rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.finalist-badge.is-champion {
+.finalist-node.is-champion {
   border-color: var(--gold);
-  box-shadow: 0 0 0 4px rgba(227, 177, 81, 0.22);
-}
-
-.finalist-badge.is-champion .finalist-label {
-  color: var(--gold);
-}
-
-.finalist-empty {
-  padding: 4px 14px;
-  border: 1px dashed rgba(247, 241, 223, 0.28);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  box-shadow: 0 0 0 4px rgba(227, 177, 81, 0.32), 0 11px 14px var(--shadow);
 }
 
 .bracket-lines {
