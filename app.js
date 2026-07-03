@@ -219,6 +219,42 @@ function renderBracket() {
   renderConnectors();
   renderTeamNodes();
   renderAdvancement();
+  renderFinalStage();
+}
+
+function renderFinalStage() {
+  const topSlot = document.querySelector("#finalist-top");
+  const bottomSlot = document.querySelector("#finalist-bottom");
+  if (!topSlot || !bottomSlot) return;
+
+  const finalMatch = latestBracket?.rounds?.find((r) => r.key === "F")?.matches?.[0];
+  if (!finalMatch) {
+    topSlot.innerHTML = "";
+    bottomSlot.innerHTML = "";
+    return;
+  }
+
+  const homeWinner = finalMatch.winner === "home";
+  const awayWinner = finalMatch.winner === "away";
+  topSlot.innerHTML = renderFinalistBadge(finalMatch.home, homeWinner);
+  bottomSlot.innerHTML = renderFinalistBadge(finalMatch.away, awayWinner);
+}
+
+function renderFinalistBadge(side, isChampion) {
+  if (!side?.code && !side?.name) {
+    return `<div class="finalist-empty" aria-hidden="true">TBD</div>`;
+  }
+  const seeded = side.code ? seededByCode.get(side.code) : null;
+  const flagItem = seeded ?? { flag: NAME_TO_FLAG[side.name] || "🏳️", apiLogo: side.logo };
+  const label = side.name || side.code || "TBD";
+  return `
+    <div class="finalist-badge${isChampion ? " is-champion" : ""}"
+         style="--team-color: ${seeded?.color ?? "#3a3a3a"}"
+         title="${label}${isChampion ? " · Champion" : ""}">
+      ${flagMarkup(flagItem)}
+      <span class="finalist-label">${label}</span>
+    </div>
+  `;
 }
 
 function renderAdvancement() {
@@ -588,6 +624,7 @@ function formatRelative(iso) {
 }
 
 let livePollHandle = null;
+let latestBracket = null;
 
 async function loadLiveData() {
   const apiBase = document.body.dataset.apiBase?.trim();
@@ -601,6 +638,7 @@ async function loadLiveData() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const snapshot = await response.json();
+    latestBracket = snapshot.bracket || null;
     applyBracketLayout(snapshot.bracket);
     mergeSnapshot(snapshot);
     renderBracket();
