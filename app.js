@@ -250,17 +250,18 @@ function renderTeamNodes() {
     const point = teamPosition(item);
     const node = document.createElement("button");
     node.type = "button";
+    const isLiveMatch = item.bracketMatch?.isLive === true;
     const classes = ["team-node"];
     if (item.eliminated) classes.push("is-eliminated");
     if (item.advanced) classes.push("is-advanced");
-    if (item.live) classes.push("is-live");
+    if (isLiveMatch) classes.push("is-live");
     if (item.id === selectedId) classes.push("is-selected");
     node.className = classes.join(" ");
     node.style.left = `${point.x / 10}%`;
     node.style.top = `${point.y / 10}%`;
     node.style.setProperty("--team-color", item.color);
     node.dataset.team = item.id;
-    const labelSuffix = item.live
+    const labelSuffix = isLiveMatch
       ? ` (live · ${item.bracketMatch?.displayClock || ""})`
       : item.eliminated ? " (eliminated)"
       : item.advanced ? " (advanced)" : "";
@@ -720,8 +721,9 @@ function buildLeaf(match, side, slot, totalSlots) {
     },
     eliminated: isLoser || base.eliminated || false,
     advanced: isWinner,
-    live: isLive,
     apiLogo: mine.logo,
+    // Note: don't set item.live here — that key holds the merged snapshot
+    // object (stats/fixtures/…). Ask bracketMatch.isLive instead.
   };
 }
 
