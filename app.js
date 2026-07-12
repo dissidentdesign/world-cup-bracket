@@ -36,9 +36,9 @@ const teams = [
 const geometry = {
   size: 1000,
   center: 500,
-  // -5.625° puts the first pair symmetrically straddling the 12 o'clock
-  // axis so France | Sweden sit equidistant left/right of the top.
-  startAngle: -5.625,
+  // Rotate the complete bracket counter-clockwise so the semifinal-to-final
+  // spokes settle onto a clean horizontal axis.
+  startAngle: -39.375,
   teamRadius: 452,
   leafStemRadius: 410,
   railRadii: [365, 286, 218, 154],
@@ -70,6 +70,16 @@ const BRACKET_POSITION = [
 ];
 
 const seededByCode = new Map(teams.map((item) => [item.code, item]));
+
+const CODE_TO_ISO = {
+  USA: "US", MEX: "MX", ARG: "AR", GER: "DE", ESP: "ES", POR: "PT",
+  FRA: "FR", SEN: "SN", BRA: "BR", CAN: "CA", ENG: "GB", JPN: "JP",
+  NED: "NL", MAR: "MA", COL: "CO", BEL: "BE", URU: "UY", AUS: "AU",
+  SUI: "CH", KOR: "KR", CRO: "HR", POL: "PL", DEN: "DK", NGA: "NG",
+  ECU: "EC", GHA: "GH", EGY: "EG", ALG: "DZ", SWE: "SE", NOR: "NO",
+  QAT: "QA", KSA: "SA", PAR: "PY", CIV: "CI", COD: "CD", CPV: "CV",
+  BIH: "BA", AUT: "AT", RSA: "ZA",
+};
 
 // Country-name → flag emoji for WC2026 teams that aren't in the seed list.
 // Only needed for placeholders; seeded teams already carry their flag.
@@ -108,11 +118,7 @@ const NAME_TO_FLAG = {
   "Republic of Ireland": "🇮🇪", "Ireland": "🇮🇪",
 };
 
-let layoutTeams = teams.map((item, index) => ({
-  ...item,
-  slot: index,
-  angle: geometry.startAngle + (360 / teams.length) * index,
-}));
+let layoutTeams = buildInitialLayout();
 
 let teamById = new Map(layoutTeams.map((item) => [item.id, item]));
 
@@ -121,6 +127,7 @@ const teamLayer = document.querySelector("#team-layer");
 const labelsLayer = document.querySelector("#round-labels");
 const panel = document.querySelector("#team-panel");
 let selectedId = "usa";
+let latestBracket = null;
 
 function team(id, name, code, flag, color, seed, confederation, player, opponent, rank, form) {
   return {
@@ -143,6 +150,32 @@ function team(id, name, code, flag, color, seed, confederation, player, opponent
     venue: "Tournament venue TBD",
     live: null,
   };
+}
+
+function buildInitialLayout() {
+  const totalSlots = BRACKET_POSITION.length * 2;
+  return BRACKET_POSITION.flatMap(([homeCode, awayCode], position) => {
+    const match = {
+      home: initialSide(homeCode),
+      away: initialSide(awayCode),
+      date: null,
+      venue: null,
+      status: "Scheduled",
+      displayClock: null,
+      live: false,
+      winner: null,
+    };
+    return [
+      buildLeaf(match, "home", position * 2, totalSlots),
+      buildLeaf(match, "away", position * 2 + 1, totalSlots),
+    ];
+  });
+}
+
+function initialSide(code) {
+  const seeded = seededByCode.get(code);
+  if (seeded) return { code, name: seeded.name, logo: null, score: null };
+  return { code, name: code, logo: null, score: null };
 }
 
 function seededStat(seed, min, max) {
@@ -201,6 +234,24 @@ function curvedRailPath(left, right, parentAngle, railRadius) {
   return `M ${left.x} ${left.y} Q ${control.x} ${control.y} ${right.x} ${right.y}`;
 }
 
+function curvedRailSegmentPath(left, right, parentAngle, railRadius, segment) {
+  const control = polarPoint(parentAngle, railRadius + 16);
+  const middle = curvePointAt(left, right, parentAngle, railRadius, 0.5);
+  const segmentControl = segment === 0
+    ? midpointPoint(left, control)
+    : midpointPoint(control, right);
+  const from = segment === 0 ? left : middle;
+  const to = segment === 0 ? middle : right;
+  return `M ${from.x} ${from.y} Q ${segmentControl.x} ${segmentControl.y} ${to.x} ${to.y}`;
+}
+
+function midpointPoint(left, right) {
+  return {
+    x: (left.x + right.x) / 2,
+    y: (left.y + right.y) / 2,
+  };
+}
+
 function curvePointAt(left, right, parentAngle, railRadius, t) {
   const control = polarPoint(parentAngle, railRadius + 16);
   const inverse = 1 - t;
@@ -222,27 +273,27 @@ function renderBracket() {
 }
 
 function renderAdvancement() {
-  // For each R32 match pair (layout slots 2k, 2k+1), if the match is
-  // completed, place the winner's flag at the inner R32 match center
-  // (geometry.roundRadii[0]) to show advancement to R16.
-  for (let pairIndex = 0; pairIndex < layoutTeams.length / 2; pairIndex += 1) {
-    const left = layoutTeams[pairIndex * 2];
-    const right = layoutTeams[pairIndex * 2 + 1];
-    const winner = left?.advanced ? left : right?.advanced ? right : null;
-    if (!winner) continue;
-    const point = roundPoint(0, pairIndex);
+  const itemByCode = new Map(layoutTeams.map((item) => [item.code, item]));
+  for (const entry of buildBracketTopology()) {
+    if (!entry.match.winner || !entry.point) continue;
+    const winnerSide = entry.match.winner === "home" ? entry.match.home : entry.match.away;
+    const winner = itemByCode.get(winnerSide?.code);
+    if (winner) renderAdvanceNode(winner, entry.point, entry.roundIndex, entry.round.name);
+  }
+}
+
+function renderAdvanceNode(winner, point, roundIndex, roundName = "knockout round") {
     const node = document.createElement("button");
     node.type = "button";
-    node.className = "advance-node";
+    node.className = `advance-node advance-node-r${roundIndex}`;
     node.style.left = `${point.x / 10}%`;
     node.style.top = `${point.y / 10}%`;
     node.style.setProperty("--team-color", winner.color);
     node.dataset.team = winner.id;
-    node.setAttribute("aria-label", `${winner.name} advanced to Round of 16`);
+    node.setAttribute("aria-label", `${winner.name} won ${roundName}`);
     node.innerHTML = flagMarkup(winner);
     node.addEventListener("click", () => selectTeam(winner.id));
     teamLayer.appendChild(node);
-  }
 }
 
 function renderTeamNodes() {
@@ -299,9 +350,116 @@ function flagSlug(emoji) {
 }
 
 function renderConnectors() {
+  const topology = buildBracketTopology();
+  if (topology.length > 0) {
+    topology.forEach((entry) => {
+      if (entry.sources.length !== 2) return;
+      const railRadius = geometry.railRadii[entry.roundIndex];
+      const leftRail = polarPoint(entry.sources[0].angle, railRadius);
+      const rightRail = polarPoint(entry.sources[1].angle, railRadius);
+      const railJoin = curvePointAt(leftRail, rightRail, entry.point.angle, railRadius, 0.5);
+      const winnerCode = entry.match.winner === "home"
+        ? entry.match.home?.code
+        : entry.match.winner === "away" ? entry.match.away?.code : null;
+      const winnerSource = entry.sources.findIndex((source) => source.code === winnerCode);
+      const isActiveWinner = winnerCode && isActiveTeamCode(winnerCode);
+      const sharedClass = isActiveWinner ? "line-path is-advanced" : "line-path";
+
+      addPath(linePath(entry.sources[0], leftRail), winnerSource === 0 && isActiveWinner ? sharedClass : "line-path");
+      addPath(linePath(entry.sources[1], rightRail), winnerSource === 1 && isActiveWinner ? sharedClass : "line-path");
+      addPath(
+        curvedRailSegmentPath(leftRail, rightRail, entry.point.angle, railRadius, 0),
+        winnerSource === 0 && isActiveWinner ? sharedClass : "line-path",
+      );
+      addPath(
+        curvedRailSegmentPath(leftRail, rightRail, entry.point.angle, railRadius, 1),
+        winnerSource === 1 && isActiveWinner ? sharedClass : "line-path",
+      );
+      addPath(linePath(railJoin, entry.point), sharedClass);
+    });
+    renderFinalSpokes(topology);
+    return;
+  }
+
+  renderFallbackConnectors();
+}
+
+function buildBracketTopology() {
+  const roundIndexByKey = { R32: 0, R16: 1, QF: 2, SF: 3 };
+  const rounds = latestBracket?.rounds || [];
+  if (!rounds.length) return [];
+
+  const sourceByCode = new Map(layoutTeams.map((item) => [item.code, teamPosition(item)]));
+  const topology = [];
+  let previousEntries = [];
+
+  for (const round of rounds) {
+    const roundIndex = roundIndexByKey[round.key];
+    if (roundIndex == null) continue;
+
+    const roundEntries = [];
+    (round.matches || []).forEach((match, matchIndex) => {
+      const sources = [match.home, match.away].map((side, sideIndex) => {
+        const previous = previousEntries[matchIndex * 2 + sideIndex];
+        const point = sourceByCode.get(side?.code) || previous?.point;
+        return point ? { ...point, code: side?.code || previous?.code } : null;
+      }).filter(Boolean);
+      const angle = sources.length === 2
+        ? midpointAngle(sources[0].angle, sources[1].angle)
+        : groupAngle(roundIndex, matchIndex);
+      const point = polarPoint(angle, geometry.roundRadii[roundIndex]);
+      const entry = { round, roundIndex, match, matchIndex, sources, point };
+      topology.push(entry);
+      roundEntries.push(entry);
+
+      if (match.winner) {
+        const winner = match.winner === "home" ? match.home : match.away;
+        if (winner?.code) sourceByCode.set(winner.code, point);
+      }
+    });
+    previousEntries = roundEntries;
+  }
+
+  return topology;
+}
+
+function midpointAngle(left, right) {
+  const delta = ((right - left + 540) % 360) - 180;
+  return left + delta / 2;
+}
+
+function isActiveTeamCode(code) {
+  return layoutTeams.some((item) => item.code === code && !item.eliminated);
+}
+
+function renderFinalSpokes(topology) {
+  const semifinals = topology
+    .filter((entry) => entry.roundIndex === 3)
+    .sort((a, b) => a.point.x - b.point.x);
+  if (semifinals.length !== 2) return;
+
+  for (const entry of semifinals) {
+    const side = entry.point.x < geometry.center ? -1 : 1;
+    const finalTarget = {
+      x: geometry.center + side * 18,
+      y: geometry.center,
+    };
+    const winnerCode = entry.match.winner === "home"
+      ? entry.match.home?.code
+      : entry.match.winner === "away" ? entry.match.away?.code : null;
+    const highlighted = winnerCode && isActiveTeamCode(winnerCode)
+      ? "line-path is-advanced"
+      : "line-path";
+    addPath(linePath(entry.point, finalTarget), highlighted);
+  }
+}
+
+function renderFallbackConnectors() {
   for (let roundIndex = 0; roundIndex < geometry.roundRadii.length; roundIndex += 1) {
     const groupCount = 16 / 2 ** roundIndex;
-    const childRadius = roundIndex === 0 ? geometry.leafStemRadius : geometry.roundRadii[roundIndex - 1];
+      // The first-round spokes must begin at the team bubble center so the
+      // visible line reaches the bubble edge instead of stopping short.
+      const childRadius = roundIndex === 0 ? geometry.teamRadius : geometry.roundRadii[roundIndex - 1];
     const railRadius = geometry.railRadii[roundIndex];
     const parentRadius = geometry.roundRadii[roundIndex];
 
@@ -323,20 +481,20 @@ function renderConnectors() {
   }
 
   for (let sideIndex = 0; sideIndex < 2; sideIndex += 1) {
-    const semi = roundPoint(3, sideIndex);
+    const semi = polarPoint(sideIndex === 0 ? 270 : 90, geometry.roundRadii[3]);
     const finalEdge = {
-      x: geometry.center + (semi.x < geometry.center ? -30 : 30),
-      y: geometry.center + (sideIndex === 0 ? -14 : 14),
+      x: geometry.center + (semi.x < geometry.center ? -18 : 18),
+      y: geometry.center,
     };
     addPath(linePath(semi, finalEdge));
   }
 
 }
 
-function addPath(d) {
+function addPath(d, className = "line-path") {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", d);
-  path.setAttribute("class", "line-path");
+  path.setAttribute("class", className);
   linesSvg.appendChild(path);
 }
 
@@ -589,6 +747,8 @@ function formatRelative(iso) {
 }
 
 let livePollHandle = null;
+const TOURNAMENT_START_TS = Date.parse("2026-06-11T00:00:00Z");
+const TOURNAMENT_END_TS = Date.parse("2026-07-20T06:00:00Z");
 
 async function loadLiveData() {
   const apiBase = document.body.dataset.apiBase?.trim();
@@ -597,12 +757,19 @@ async function loadLiveData() {
   setLiveStatus("connecting");
 
   try {
-    const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/snapshot`, {
+    const snapshotUrl = new URL(`${apiBase.replace(/\/$/, "")}/api/snapshot`);
+    // During the tournament, bypass the Worker's edge cache so completed games
+    // and bracket advancement do not sit stale for up to 15 minutes.
+    if (isTournamentActiveWindow()) snapshotUrl.searchParams.set("refresh", "1");
+
+    const response = await fetch(snapshotUrl, {
       headers: { Accept: "application/json" },
+      cache: "no-store",
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const snapshot = await response.json();
     applyBracketLayout(snapshot.bracket);
+    latestBracket = snapshot.bracket || null;
     mergeSnapshot(snapshot);
     renderBracket();
     renderTeamPanel(teamById.get(selectedId));
@@ -619,9 +786,15 @@ async function loadLiveData() {
 
 function scheduleLivePoll(hasLive, delayMs) {
   if (livePollHandle) clearTimeout(livePollHandle);
-  // Poll every 30s while a match is in progress, otherwise every 5 min.
-  const delay = delayMs ?? (hasLive ? 30_000 : 300_000);
+  // Poll often during the tournament even if ESPN does not currently mark a
+  // match as live. Final whistles and bracket advancement matter too.
+  const delay = delayMs ?? (hasLive ? 30_000 : isTournamentActiveWindow() ? 60_000 : 300_000);
   livePollHandle = setTimeout(loadLiveData, delay);
+}
+
+function isTournamentActiveWindow() {
+  const now = Date.now();
+  return now >= TOURNAMENT_START_TS && now <= TOURNAMENT_END_TS;
 }
 
 function mergeSnapshot(snapshot) {
@@ -735,7 +908,7 @@ function placeholderTeam(side) {
     id: `unk-${(side.code || name).toLowerCase().replace(/[^a-z0-9]/g, "")}`,
     name,
     code,
-    flag: NAME_TO_FLAG[name] || "🏳️",
+    flag: NAME_TO_FLAG[name] || flagEmojiFromCode(code) || "🏳️",
     color: "#2d3138",
     seed: "—",
     confederation: "—",
@@ -751,6 +924,12 @@ function placeholderTeam(side) {
     venue: "TBD",
     live: null,
   };
+}
+
+function flagEmojiFromCode(code) {
+  const iso = CODE_TO_ISO[code];
+  if (!iso || iso.length !== 2) return null;
+  return [...iso].map((letter) => String.fromCodePoint(0x1f1e6 + letter.charCodeAt(0) - 65)).join("");
 }
 
 function setLiveStatus(state, generatedAt, liveCount = 0) {
