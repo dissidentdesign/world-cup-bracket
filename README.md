@@ -2,7 +2,8 @@
 
 A single-page app that renders the FIFA World Cup 2026 knockout bracket as a rounded 32-team wheel and pulls live results, standings, and broadcasts from ESPN via a tiny Cloudflare Worker.
 
-Live URL: <https://github.com/dissidentdesign/world-cup-bracket>
+Live app: <https://world-cup-bracket.pages.dev/>
+Source: <https://github.com/dissidentdesign/world-cup-bracket>
 
 ## What's in the box
 
