@@ -2,6 +2,8 @@
 
 A single-page app that renders the FIFA World Cup 2026 knockout bracket as a rounded 32-team wheel and pulls live results, standings, and broadcasts from ESPN via a tiny Cloudflare Worker.
 
+The repository also includes a native SwiftUI app in [`ios/`](ios/) for iPhone and iPad. Open `ios/WorldCupApp.xcodeproj` in Xcode and run the `WorldCupApp` scheme; it uses the same live snapshot API as the web client.
+
 Live app: <https://world-cup-bracket.pages.dev/>
 Source: <https://github.com/dissidentdesign/world-cup-bracket>
 
